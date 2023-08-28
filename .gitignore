@@ -20,7 +20,7 @@
 .clang-tidy
 .vs/
 .vscode/
-
+workspace
 lcov-report/
 gcovr-report/
 
