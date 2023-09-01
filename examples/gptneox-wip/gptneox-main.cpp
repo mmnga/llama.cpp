@@ -661,7 +661,7 @@ ggml_tensor * gpt_neox_ff(
         const gpt_neox_block &block,
         ggml_context * ctx0,
         ggml_tensor * inp,
-        const gpt_neox_hparams & hparams) {
+        const gpt_neox_hparams &hparams) {
 
     ggml_tensor * cur = ggml_norm(ctx0, inp, hparams.norm_eps);
 
