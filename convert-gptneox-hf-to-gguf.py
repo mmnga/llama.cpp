@@ -118,51 +118,119 @@ gguf_writer.add_layer_norm_eps(hparams["layer_norm_eps"])
 print("gguf: get tokenizer metadata")
 
 tokens: list[bytearray] = []
+toktypes: list[int] = []
+scores: list[float] = []
 
 tokenizer_json_file = dir_model / 'tokenizer.json'
-if not tokenizer_json_file.is_file():
-    print(f'Error: Missing {tokenizer_json_file}', file = sys.stderr)
-    sys.exit(1)
+# 
+# bpe tokenizer
+# 
+if tokenizer_json_file.is_file():
 
-# gpt2 tokenizer
-gguf_writer.add_tokenizer_model("gpt2")
+    # gpt2 tokenizer
+    gguf_writer.add_tokenizer_model("gpt2")
 
-with open(tokenizer_json_file, "r", encoding="utf-8") as f:
-    tokenizer_json = json.load(f)
+    with open(tokenizer_json_file, "r", encoding="utf-8") as f:
+        tokenizer_json = json.load(f)
 
-print("gguf: get gpt2 tokenizer vocab")
+    print("gguf: get gpt2 tokenizer vocab")
 
-vocab_size = len(tokenizer_json["model"]["vocab"])
+    vocab_size = len(tokenizer_json["model"]["vocab"])
 
-# ref: https://github.com/cmp-nct/ggllm.cpp/blob/master/falcon_convert.py
-tokenizer = AutoTokenizer.from_pretrained(dir_model)
+    # ref: https://github.com/cmp-nct/ggllm.cpp/blob/master/falcon_convert.py
+    tokenizer = AutoTokenizer.from_pretrained(dir_model, use_fast=True)
 
-reverse_vocab = {id: encoded_tok for encoded_tok, id in tokenizer.vocab.items()}
-byte_encoder = bytes_to_unicode()
-byte_decoder = {v: k for k, v in byte_encoder.items()}
+    reverse_vocab = {id: encoded_tok for encoded_tok, id in tokenizer.vocab.items()}
+    byte_encoder = bytes_to_unicode()
+    byte_decoder = {v: k for k, v in byte_encoder.items()}
 
-for i in range(vocab_size):
-    if i in reverse_vocab:
+    for i in range(vocab_size):
+        if i in reverse_vocab:
+            try:
+                text = bytearray([byte_decoder[c] for c in reverse_vocab[i]])
+            except KeyError:
+                text = bytearray()
+                for c in reverse_vocab[i]:
+                    if ord(c) < 256:  # single byte character
+                        text.append(byte_decoder[ord(c)])
+                    else:  # multibyte special token character
+                        text.extend(c.encode('utf-8'))
+        else:
+            print(f"Key {i} not in tokenizer vocabulary. Padding with an arbitrary token.")
+            pad_token = f"[PAD{i}]".encode("utf8")
+            text = bytearray(pad_token)
+
+        tokens.append(text)
+        toktypes.append(gguf.TokenType.NORMAL)  # dummy
+
+    gguf_writer.add_token_list(tokens)
+    gguf_writer.add_token_types(toktypes)
+
+    special_vocab = gguf.SpecialVocab(dir_model, load_merges = True)
+    special_vocab.add_to_gguf(gguf_writer)
+
+# 
+# spm tokenizer
+# 
+else:
+
+    # spm tokenizer
+    gguf_writer.add_tokenizer_model("spm")
+
+    print("gguf: get spm tokenizer vocab")
+
+    sp_tokenizer = AutoTokenizer.from_pretrained(dir_model, use_fast=False)
+    sp_vocab = sp_tokenizer.get_vocab()
+    vocab_size = len(sp_vocab)
+
+    for i in range(vocab_size):
+        piece = sp_tokenizer.sp_model.id_to_piece(i)
+        text = piece.encode("utf-8")
+        score = sp_tokenizer.sp_model.get_score(i)
+
+        toktype = gguf.TokenType.NORMAL  # defualt to normal token type
+        toktypetext = "NORMAL"
+
         try:
-            text = bytearray([byte_decoder[c] for c in reverse_vocab[i]])
-        except KeyError:
-            text = bytearray()
-            for c in reverse_vocab[i]:
-                if ord(c) < 256:  # single byte character
-                    text.append(byte_decoder[ord(c)])
-                else:  # multibyte special token character
-                    text.extend(c.encode('utf-8'))
-    else:
-        print(f"Key {i} not in tokenizer vocabulary. Padding with an arbitrary token.")
-        pad_token = f"[PAD{i}]".encode("utf8")
-        text = bytearray(pad_token)
+            if sp_tokenizer.sp_model.is_unknown(i):
+                toktype = gguf.TokenType.UNKNOWN
+                toktypetext = "UNKNOWN"
+            if sp_tokenizer.sp_model.is_control(i):
+                toktype = gguf.TokenType.CONTROL
+                toktypetext = "CONTROL"
+            if sp_tokenizer.sp_model.is_unused(i):
+                toktype = gguf.TokenType.UNUSED
+                toktypetext = "UNUSED"
+            if sp_tokenizer.sp_model.is_byte(i):
+                toktype = gguf.TokenType.BYTE
+                toktypetext = "BYTE"
+        except:
+            # added tokens piece id is out of range.
+            toktype = gguf.TokenType.USER_DEFINED
+            score = -1000.0
 
-    tokens.append(text)
+        tokens.append(text)
+        scores.append(score)
+        toktypes.append(toktype)
 
-gguf_writer.add_token_list(tokens)
+    gguf_writer.add_token_list(tokens)
+    gguf_writer.add_token_scores(scores)
+    gguf_writer.add_token_types(toktypes)
+            
+    if sp_tokenizer.bos_token_id is not None :
+        gguf_writer.add_bos_token_id(sp_tokenizer.bos_token_id)
 
-special_vocab = gguf.SpecialVocab(dir_model, load_merges = True)
-special_vocab.add_to_gguf(gguf_writer)
+    if sp_tokenizer.eos_token_id is not None :
+        gguf_writer.add_eos_token_id(sp_tokenizer.eos_token_id)
+    
+    if sp_tokenizer.unk_token_id is not None :
+        gguf_writer.add_unk_token_id(sp_tokenizer.unk_token_id)
+    
+    if sp_tokenizer.sep_token_id is not None :
+        gguf_writer.add_sep_token_id(sp_tokenizer.sep_token_id)
+    
+    if sp_tokenizer.pad_token_id is not None :
+        gguf_writer.add_pad_token_id(sp_tokenizer.pad_token_id)
 
 # TENSORS
 

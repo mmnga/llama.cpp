@@ -1,5 +1,6 @@
 #include "ggml.h"
 #include "cmpnct_gpt2bpe.hpp"
+#include "spm_tokenizer.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -28,6 +29,7 @@ struct gpt_neox_hparams {
     uint32_t n_rot    = 0; // rotary_pct * (n_embd / n_head)
     bool par_res = true;
     float norm_eps = 1e-5;
+    llama_vocab_type vocab_type = LLAMA_VOCAB_TYPE_BPE;
 };
 
 struct gpt_neox_block {
@@ -199,7 +201,7 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
 }
 
 gpt2bpe_vocab::id sample_top_k_top_p_repeat(
-        const gpt2bpe_vocab & vocab,
+        const int n_logits,
         const float * logits,
         const int32_t * last_n_tokens_data,
         size_t last_n_tokens_data_size,
@@ -209,8 +211,6 @@ gpt2bpe_vocab::id sample_top_k_top_p_repeat(
         int repeat_last_n,
         float repeat_penalty,
         std::mt19937 & rng) {
-
-    int n_logits = vocab.id_to_token.size();
 
     const auto * plogits = logits;
 
@@ -455,10 +455,12 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
         int keyidx = gguf_find_key(ggufctx, "tokenizer.ggml.model");
 
         if (keyidx != -1) {
-            if ( strcmp(gguf_get_val_str(ggufctx, keyidx), "gpt2") != 0) {
-                fprintf(stdout, "%s: tokenizer model not supported!\n", __func__);
-                return false;
+            if ( strcmp(gguf_get_val_str(ggufctx, keyidx), "gpt2") == 0) {
+                hparams.vocab_type = LLAMA_VOCAB_TYPE_BPE;
+            } else {
+                hparams.vocab_type = LLAMA_VOCAB_TYPE_SPM;
             }
+            printf("%s: vocab type = %s\n", __func__, hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE ? "bpe" : "spm");
         } else {
             fprintf(stdout, "%s: tokenizer model not found!\n", __func__);
             return false;
@@ -468,23 +470,12 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
         int tokens_keyidx = gguf_find_key(ggufctx, "tokenizer.ggml.tokens");
 
         if (tokens_keyidx == -1) {
-            fprintf(stdout, "%s: gpt2 tokenizer vocab not found!\n", __func__);
-            return false;
-        }
-
-        int merges_keyidx = gguf_find_key(ggufctx, "tokenizer.ggml.merges");
-
-        if (merges_keyidx == -1) {
-            fprintf(stdout, "%s: gpt2 tokenizer merges not found!\n", __func__);
+            fprintf(stdout, "%s: tokenizer vocab not found!\n", __func__);
             return false;
         }
 
         hparams.n_vocab = gguf_get_arr_n(ggufctx,tokens_keyidx);
-        hparams.n_merges = gguf_get_arr_n(ggufctx,merges_keyidx);
-
-        fprintf(stdout, "%s: gpt2 tokenizer vocab  = %zu\n", __func__, hparams.n_vocab);
-        fprintf(stdout, "%s: gpt2 tokenizer merges = %zu\n", __func__, hparams.n_merges);
-
+        fprintf(stdout, "%s: tokenizer vocab  = %zu\n", __func__, hparams.n_vocab);
         for (size_t i = 0; i < hparams.n_vocab; i++) {
             std::string word = gguf_get_arr_str(ggufctx, tokens_keyidx, i);
 
@@ -498,25 +489,37 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
             }
         }
 
-        std::vector<std::pair<std::string, std::string>> bpe_merges;
+        hparams.n_merges = 0;
+        if (hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE) {
 
-        for (size_t i = 0; i < hparams.n_merges; i++) {
+            int merges_keyidx = gguf_find_key(ggufctx, "tokenizer.ggml.merges");
+            if (merges_keyidx == -1) {
+                fprintf(stdout, "%s: gpt2 tokenizer merges not found!\n", __func__);
+                return false;
+            }
+            
+            hparams.n_merges = gguf_get_arr_n(ggufctx,merges_keyidx);
+            fprintf(stdout, "%s: gpt2 tokenizer merges = %zu\n", __func__, hparams.n_merges);
 
-            std::string word = gguf_get_arr_str(ggufctx, merges_keyidx, i);
+            std::vector<std::pair<std::string, std::string>> bpe_merges;
 
-            // Split the merges
-            std::string first, second;
-            size_t pos = word.find(' ', 1); // Start the search from the second character
-            if (pos != std::string::npos) {
-                first = word.substr(0, pos);
-                second = word.substr(pos + 1);
+            for (size_t i = 0; i < hparams.n_merges; i++) {
+
+                std::string word = gguf_get_arr_str(ggufctx, merges_keyidx, i);
+
+                // Split the merges
+                std::string first, second;
+                size_t pos = word.find(' ', 1); // Start the search from the second character
+                if (pos != std::string::npos) {
+                    first = word.substr(0, pos);
+                    second = word.substr(pos + 1);
+                }
+
+                bpe_merges.push_back(std::make_pair(first, second));
             }
 
-            bpe_merges.push_back(std::make_pair(first, second));
+            vocab.populate_bpe_ranks(bpe_merges);
         }
-
-        vocab.populate_bpe_ranks(bpe_merges);
-
 
         keyidx = gguf_find_key(ggufctx, "tokenizer.ggml.bos_token_id"); if( keyidx != -1 ) {       vocab.special_bos_id = (int32_t)gguf_get_val_u32(ggufctx, keyidx); }
         keyidx = gguf_find_key(ggufctx, "tokenizer.ggml.eos_token_id"); if( keyidx != -1 ) {       vocab.special_eos_id = (int32_t)gguf_get_val_u32(ggufctx, keyidx); }
@@ -706,7 +709,7 @@ bool gpt_neox_eval(
     const int n_vocab = hparams.n_vocab;
     const int n_rot   = hparams.n_rot;
 
-    static size_t buf_size = 256u*1024*1024;
+    static size_t buf_size = 4*256u*1024*1024;
     static void * buf = malloc(buf_size);
 
     // use 2 scratch buffers
@@ -932,6 +935,7 @@ int main(int argc, char ** argv) {
     int64_t t_load_us = 0;
 
     gpt2bpe_vocab vocab;
+    llama_vocab vocab_spm;
     gpt_neox_model model;
 
     // load the model
@@ -941,6 +945,44 @@ int main(int argc, char ** argv) {
         if (!gpt_neox_model_load(params.model, model, vocab)) {
             fprintf(stderr, "%s: failed to load model from '%s'\n", __func__, params.model.c_str());
             return 1;
+        }
+
+        // bpe to spm
+        if (model.hparams.vocab_type == LLAMA_VOCAB_TYPE_SPM) {
+            vocab_spm.special_bos_id = vocab.special_bos_id;
+            vocab_spm.special_eos_id = vocab.special_eos_id;
+            vocab_spm.special_unk_id = vocab.special_unk_id;
+            vocab_spm.special_sep_id = vocab.special_sep_id;
+            vocab_spm.special_pad_id = vocab.special_pad_id;
+            vocab_spm.linefeed_id = vocab.linefeed_id;
+            vocab_spm.token_to_id = vocab.token_to_id;
+            auto & ggufctx = model.ggufctx;
+
+            // scores
+            const int score_idx = gguf_find_key(ggufctx, "tokenizer.ggml.scores");
+            if (score_idx == -1) {
+                throw std::runtime_error("cannot find tokenizer scores in model file\n");
+            }
+            const float * scores = (const float * ) gguf_get_arr_data(ggufctx, score_idx);
+
+            // token types
+            const int toktype_idx = gguf_find_key(ggufctx, "tokenizer.ggml.token_type");
+            if (toktype_idx == -1) {
+                throw std::runtime_error("cannot find token type list in GGUF file\n");
+            }
+            const int * toktypes = (const int * ) gguf_get_arr_data(ggufctx, toktype_idx);
+
+            // parse id_to_token data
+            std::vector<llama_vocab::token_data> id_to_token(model.hparams.n_vocab);
+            for (size_t i=0; i<model.hparams.n_vocab;i++) {
+                llama_vocab::token_data token;
+                token.text = vocab.id_to_token.find(i) != vocab.id_to_token.end() ? vocab.id_to_token[i] : "";
+                token.score = scores[i];
+                token.type =  (llama_token_type) toktypes[i];
+                id_to_token[i] = token;
+                // printf("txt:%s s:%f tp:%d\n",token.text.c_str(), token.score, token.type );
+            }
+            vocab_spm.id_to_token = id_to_token;
         }
 
         t_load_us = ggml_time_us() - t_start_us;
@@ -979,8 +1021,8 @@ int main(int argc, char ** argv) {
     std::vector<float> logits;
 
     // tokenize the prompt
-    std::vector<gpt2bpe_vocab::id> embd_inp = gpt2bpe_tokenize(vocab, params.prompt,false, false);
-
+    std::vector<gpt2bpe_vocab::id> embd_inp = model.hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE ?
+        gpt2bpe_tokenize(vocab, params.prompt,false, false) : spm_tokenize(vocab_spm, params.prompt, false, false);
     params.n_predict = std::min(params.n_predict, model.hparams.n_ctx - (int) embd_inp.size());
 
     printf("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size());
@@ -1031,8 +1073,8 @@ int main(int argc, char ** argv) {
 
             {
                 const int64_t t_start_sample_us = ggml_time_us();
-
-                id = sample_top_k_top_p_repeat(vocab, logits.data() + (logits.size() - n_vocab), last_n_tokens.data(), last_n_tokens.size(), top_k, top_p, temp, repeat_last_n, repeat_penalty, rng);
+                int n_logits = model.hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE ? vocab.id_to_token.size() : vocab_spm.id_to_token.size();
+                id = sample_top_k_top_p_repeat(n_logits, logits.data() + (logits.size() - n_vocab), last_n_tokens.data(), last_n_tokens.size(), top_k, top_p, temp, repeat_last_n, repeat_penalty, rng);
 
                 last_n_tokens.erase(last_n_tokens.begin());
                 last_n_tokens.push_back(id);
@@ -1055,7 +1097,11 @@ int main(int argc, char ** argv) {
 
         // display text
         for (auto id : embd) {
-            printf("%s", vocab.id_to_token[id].c_str()  );
+            if (model.hparams.vocab_type == LLAMA_VOCAB_TYPE_SPM) {
+                printf("%s", llama_token_to_text(vocab_spm, id).c_str());
+            } else {
+                printf("%s", vocab.id_to_token[id].c_str());
+            }
         }
         fflush(stdout);
 
