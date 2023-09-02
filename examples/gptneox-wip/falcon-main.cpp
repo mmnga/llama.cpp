@@ -738,7 +738,7 @@ bool falcon_eval(
 
         // self-attention
         {
-            layernorm_output = ggml_norm(ctx0, inpL);
+            layernorm_output = ggml_norm(ctx0, inpL, hparams.norm_eps);
 
             layernorm_output = ggml_add(ctx0,
                     ggml_mul(ctx0,
@@ -747,7 +747,7 @@ bool falcon_eval(
                     ggml_repeat(ctx0, model.blocks[il].input_layernorm_b, layernorm_output));
 
             if ( hparams.n_head_kv == 8 ) { // Falcon-40B
-                cur = ggml_norm(ctx0, inpL);
+                cur = ggml_norm(ctx0, inpL, hparams.norm_eps);
 
                 cur = ggml_add(ctx0,
                         ggml_mul(ctx0,
@@ -898,7 +898,7 @@ bool falcon_eval(
 
     // norm
     {
-        inpL = ggml_norm(ctx0, inpL);
+        inpL = ggml_norm(ctx0, inpL, hparams.norm_eps);
 
         // inpL = ln_f_g*inpL + ln_f_b
         inpL = ggml_add(ctx0,
