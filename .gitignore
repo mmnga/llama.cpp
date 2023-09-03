@@ -17,6 +17,7 @@
 .envrc
 .swiftpm
 .venv
+/venv
 .clang-tidy
 .vs/
 .vscode/
