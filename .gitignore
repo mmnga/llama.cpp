@@ -18,6 +18,7 @@
 .swiftpm
 .venv
 /venv
+/workspace
 .clang-tidy
 .vs/
 .vscode/
