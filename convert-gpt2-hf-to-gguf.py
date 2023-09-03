@@ -284,6 +284,10 @@ for part_name in part_names:
         # we don't need these
         if name.endswith(".attention.masked_bias") or name.endswith(".attention.bias") or name.endswith(".attention.rotary_emb.inv_freq"):
             continue
+        
+        # skip pattern 2.
+        if name.endswith(".attn.masked_bias") or name.endswith(".attn.bias") or name.endswith(".attn.rotary_emb.inv_freq"):
+            continue
 
         old_dtype = data.dtype
 
@@ -316,7 +320,7 @@ for part_name in part_names:
         # if f16 desired, convert any float32 2-dim weight tensors to float16
         if ftype == 1 and data_dtype == np.float32 and name.endswith(".weight") and n_dims == 2:
             data = data.astype(np.float16)
-            
+
         if ftype == 1 and name.endswith("pos_embd.weight"):
             data = data.astype(np.float32)
 

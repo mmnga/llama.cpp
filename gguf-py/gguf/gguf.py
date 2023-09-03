@@ -248,6 +248,7 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_QKV: (
             "gpt_neox.layers.{bid}.attention.query_key_value",    # gptneox
             "transformer.h.{bid}.attn.c_attn",                    # gpt2
+            "transformer.h.{bid}.attn",                           # gpt2( I also had this pattern with gpt2 parameters. )
             "transformer.blocks.{bid}.attn.Wqkv",                 # mpt
             "transformer.h.{bid}.self_attention.query_key_value", # falcon
         ),
