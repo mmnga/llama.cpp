@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # HF gptneox--> gguf conversion
 
 from __future__ import annotations
@@ -40,7 +39,19 @@ def bytes_to_unicode():
             bs.append(b)
             cs.append(2**8+n)
             n += 1
-    return dict(zip(bs, (chr(n) for n in cs)))
+    cs = [chr(n) for n in cs]
+    return dict(zip(bs, cs))
+
+
+def count_model_parts(dir_model: str) -> int:
+    num_parts = 0
+    for filename in os.listdir(dir_model):
+        if filename.startswith("pytorch_model-"):
+            num_parts += 1
+
+    if num_parts > 0:
+        print("gguf: found " + str(num_parts) + " model parts")
+    return num_parts
 
 
 def count_model_parts(dir_model: Path) -> int:
@@ -55,7 +66,7 @@ def count_model_parts(dir_model: Path) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Convert a GPT-NeoX model to a GGML compatible file")
+    parser = argparse.ArgumentParser(description="Convert a GPT-J model to a GGML compatible file")
     parser.add_argument("--vocab-only",  action="store_true",    help="extract only the vocab")
     parser.add_argument("--outfile",     type=Path,              help="path to write to; default: based on input")
     parser.add_argument("model",         type=Path,              help="directory containing model file, or model file itself (*.bin)")
@@ -88,7 +99,7 @@ print("gguf: loading model "+dir_model.name)
 with open(dir_model / "config.json", "r", encoding="utf-8") as f:
     hparams = json.load(f)
 
-if hparams["architectures"][0] != "GPTNeoXForCausalLM":
+if hparams["architectures"][0] != "GPTJForCausalLM":
     print("Model architecture not supported: " + hparams["architectures"][0])
 
     sys.exit()
@@ -96,22 +107,22 @@ if hparams["architectures"][0] != "GPTNeoXForCausalLM":
 # get number of model parts
 num_parts = count_model_parts(dir_model)
 
-ARCH=gguf.MODEL_ARCH.GPTNEOX
+ARCH=gguf.MODEL_ARCH.GPTJ
 gguf_writer = gguf.GGUFWriter(fname_out, gguf.MODEL_ARCH_NAMES[ARCH])
 
 print("gguf: get model metadata")
 
-block_count = hparams["num_hidden_layers"]
+block_count = hparams["n_layer"]
+
 
 gguf_writer.add_name(dir_model.name)
-gguf_writer.add_context_length(hparams["max_position_embeddings"])
-gguf_writer.add_embedding_length(hparams["hidden_size"])
+gguf_writer.add_context_length(hparams["n_positions"])
+gguf_writer.add_embedding_length(hparams["n_embd"])
 gguf_writer.add_block_count(block_count)
-gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
-gguf_writer.add_rope_dimension_count(int(hparams["rotary_pct"]*(hparams["hidden_size"]//hparams["num_attention_heads"])))
-gguf_writer.add_head_count(hparams["num_attention_heads"])
+gguf_writer.add_rope_dimension_count(hparams["rotary_dim"])
+gguf_writer.add_head_count(hparams["n_head"])
 gguf_writer.add_parallel_residual(hparams["use_parallel_residual"] if "use_parallel_residual" in hparams else True)
-gguf_writer.add_layer_norm_eps(hparams["layer_norm_eps"])
+gguf_writer.add_layer_norm_eps(hparams["layer_norm_epsilon"])
 
 # TOKENIZATION
 
@@ -193,26 +204,23 @@ else:
     vocab_size = len(sp_vocab)
 
     for i in range(vocab_size):
-        piece = sp_tokenizer.sp_model.id_to_piece(i)
-        text = piece.encode("utf-8")
-        score = sp_tokenizer.sp_model.get_score(i)
-
+        text = ""
         toktype = gguf.TokenType.NORMAL  # defualt to normal token type
-        toktypetext = "NORMAL"
+        score = 0.0 # dummy
 
         try:
+            piece = sp_tokenizer.sp_model.id_to_piece(i)
+            text = piece.encode("utf-8")
+            score = sp_tokenizer.sp_model.get_score(i)
+
             if sp_tokenizer.sp_model.is_unknown(i):
                 toktype = gguf.TokenType.UNKNOWN
-                toktypetext = "UNKNOWN"
             if sp_tokenizer.sp_model.is_control(i):
                 toktype = gguf.TokenType.CONTROL
-                toktypetext = "CONTROL"
             if sp_tokenizer.sp_model.is_unused(i):
                 toktype = gguf.TokenType.UNUSED
-                toktypetext = "UNUSED"
             if sp_tokenizer.sp_model.is_byte(i):
                 toktype = gguf.TokenType.BYTE
-                toktypetext = "BYTE"
         except:
             # added tokens piece id is out of range.
             toktype = gguf.TokenType.USER_DEFINED
@@ -230,18 +238,23 @@ else:
     gguf_writer.add_token_types(toktypes)
             
     if sp_tokenizer.bos_token_id is not None :
+        print("add bos token ",sp_tokenizer.bos_token_id, tokens[sp_tokenizer.bos_token_id])
         gguf_writer.add_bos_token_id(sp_tokenizer.bos_token_id)
 
     if sp_tokenizer.eos_token_id is not None :
+        print("add eos token ",sp_tokenizer.eos_token_id, tokens[sp_tokenizer.eos_token_id])
         gguf_writer.add_eos_token_id(sp_tokenizer.eos_token_id)
     
     if sp_tokenizer.unk_token_id is not None :
+        print("add unk token ",sp_tokenizer.unk_token_id, tokens[sp_tokenizer.unk_token_id])
         gguf_writer.add_unk_token_id(sp_tokenizer.unk_token_id)
     
     if sp_tokenizer.sep_token_id is not None :
+        print("add sep token ",sp_tokenizer.sep_token_id, tokens[sp_tokenizer.sep_token_id])
         gguf_writer.add_sep_token_id(sp_tokenizer.sep_token_id)
     
     if sp_tokenizer.pad_token_id is not None :
+        print("add pad token ",sp_tokenizer.pad_token_id, tokens[sp_tokenizer.pad_token_id])
         gguf_writer.add_pad_token_id(sp_tokenizer.pad_token_id)
 
 # TENSORS
@@ -280,8 +293,11 @@ for part_name in part_names:
         data = data.squeeze().numpy()
 
         # map tensor names
-        new_name = tensor_map.get_name(name, try_suffixes = (".weight", ".bias"))
-        if new_name is None:
+        if name.endswith(".weight") and name[:-7] in tensor_map:
+            name = tensor_map[name[:-7]] + ".weight"
+        elif name.endswith(".bias") and name[:-5] in tensor_map:
+            name = tensor_map[name[:-5]] + ".bias"
+        else:
             print("Can not map tensor '" + name + "'")
             sys.exit()
 
@@ -300,9 +316,9 @@ for part_name in part_names:
         if ftype == 1 and data_dtype == np.float32 and name.endswith(".weight") and n_dims == 2:
             data = data.astype(np.float16)
 
-        print(new_name + ", n_dims = " + str(n_dims) + ", " + str(old_dtype) + " --> " + str(data.dtype))
+        print(name + ", n_dims = " + str(n_dims) + ", " + str(old_dtype) + " --> " + str(data.dtype))
 
-        gguf_writer.add_tensor(new_name, data)
+        gguf_writer.add_tensor(name, data)
 
 
 print("gguf: write header")

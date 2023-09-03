@@ -18,35 +18,32 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
-// default hparams
-struct gpt_neox_hparams {
+
+// default hparams (GPT-J 6B)
+struct gptj_hparams {
     size_t n_merges = 0;
     size_t n_vocab  = 0;
     uint32_t n_ctx    = 0;
     uint32_t n_embd   = 0;
     uint32_t n_head   = 0;
     uint32_t n_block  = 0;
-    uint32_t n_rot    = 0; // rotary_pct * (n_embd / n_head)
+    uint32_t n_rot    = 0;
     bool par_res = true;
     float norm_eps = 1e-5;
     llama_vocab_type vocab_type = LLAMA_VOCAB_TYPE_BPE;
 };
 
-struct gpt_neox_block {
-    // pre normalization
+struct gptj_block {
+    // normalization
     struct ggml_tensor * ln_1_g;
     struct ggml_tensor * ln_1_b;
 
     // attention
-    struct ggml_tensor * c_attn_attn_w;
-    struct ggml_tensor * c_attn_attn_b;
+    struct ggml_tensor * c_attn_q_proj_w;
+    struct ggml_tensor * c_attn_k_proj_w;
+    struct ggml_tensor * c_attn_v_proj_w;
 
     struct ggml_tensor * c_attn_proj_w;
-    struct ggml_tensor * c_attn_proj_b;
-
-    // post normalization
-    struct ggml_tensor * ln_2_g;
-    struct ggml_tensor * ln_2_b;
 
     // ff
     struct ggml_tensor * c_mlp_fc_w;
@@ -56,8 +53,8 @@ struct gpt_neox_block {
     struct ggml_tensor * c_mlp_proj_b;
 };
 
-struct gpt_neox_model {
-    gpt_neox_hparams hparams;
+struct gptj_model {
+    gptj_hparams hparams;
 
     // normalization
     struct ggml_tensor * ln_f_g;
@@ -66,8 +63,9 @@ struct gpt_neox_model {
     struct ggml_tensor * wte; // position embedding
 
     struct ggml_tensor * lmh_g; // language model head
+    struct ggml_tensor * lmh_b; // language model bias
 
-    std::vector<gpt_neox_block> blocks;
+    std::vector<gptj_block> blocks;
 
     // key + value memory
     struct ggml_tensor * memory_k;
@@ -77,7 +75,6 @@ struct gpt_neox_model {
     struct gguf_context * ggufctx;
     struct ggml_context * ctx;
     struct ggml_context * kvctx;
-
     std::map<std::string, struct ggml_tensor *> tensors;
 };
 
@@ -210,8 +207,8 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
     return true;
 }
 
-gpt2bpe_vocab::id sample_top_k_top_p_repeat(
-        const int n_logits,
+int32_t sample_top_k_top_p_repeat(
+        int n_logits,
         const float * logits,
         const int32_t * last_n_tokens_data,
         size_t last_n_tokens_data_size,
@@ -229,7 +226,7 @@ gpt2bpe_vocab::id sample_top_k_top_p_repeat(
     if (temp <= 0) {
         // select the token with the highest logit directly
         float max_logit = plogits[0];
-        gpt2bpe_vocab::id max_id = 0;
+        int32_t max_id = 0;
 
         for (int i = 1; i < n_logits; ++i) {
             if (plogits[i] > max_logit) {
@@ -241,7 +238,7 @@ gpt2bpe_vocab::id sample_top_k_top_p_repeat(
     }
 
 
-    std::vector<std::pair<double, gpt2bpe_vocab::id>> logits_id;
+    std::vector<std::pair<double, int32_t>> logits_id;
     logits_id.reserve(n_logits);
 
     {
@@ -266,7 +263,7 @@ gpt2bpe_vocab::id sample_top_k_top_p_repeat(
     std::partial_sort(
             logits_id.begin(),
             logits_id.begin() + top_k, logits_id.end(),
-            [](const std::pair<double, gpt2bpe_vocab::id> & a, const std::pair<double, gpt2bpe_vocab::id> & b) {
+            [](const std::pair<double, int32_t> & a, const std::pair<double, int32_t> & b) {
         return a.first > b.first;
     });
 
@@ -324,6 +321,7 @@ gpt2bpe_vocab::id sample_top_k_top_p_repeat(
 
 }
 
+
 struct ggml_tensor * get_tensor_ex( struct ggml_context * ctx, std::string name){
 
     struct ggml_tensor * cur = ggml_get_tensor(ctx, name.c_str());
@@ -337,7 +335,7 @@ struct ggml_tensor * get_tensor_ex( struct ggml_context * ctx, std::string name)
 }
 
 // load the model's weights from a file
-bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2bpe_vocab & vocab) {
+bool gptj_model_load(const std::string & fname, gptj_model & model, gpt2bpe_vocab & vocab) {
     printf("%s: loading model from '%s'..\n", __func__, fname.c_str());
 
     model.ctx = NULL;
@@ -348,7 +346,6 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
     };
 
     auto & ggufctx = model.ggufctx;
-
     ggufctx  = gguf_init_from_file(fname.c_str(), ggufparams);
 
     if (!ggufctx) {
@@ -378,7 +375,6 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
     // print some standard metadata
     {
         int keyidx;
-
         keyidx = gguf_find_key(ggufctx, "general.name");
         if (keyidx != -1) { fprintf(stdout, "%s: model name           = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
         keyidx = gguf_find_key(ggufctx, "general.description");
@@ -391,7 +387,7 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
         if (keyidx != -1) { fprintf(stdout, "%s: model architecture   = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
         keyidx = gguf_find_key(ggufctx, "general.file_type");
         if (keyidx != -1) { fprintf(stdout, "%s: model file type      = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
-        keyidx = gguf_find_key(ggufctx, "gptneox.tensor_data_layout");
+        keyidx = gguf_find_key(ggufctx, "gptj.tensor_data_layout");
         if (keyidx != -1) { fprintf(stdout, "%s: model data layout    = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
         keyidx = gguf_find_key(ggufctx, "general.source.hugginface.repository");
         if (keyidx != -1) { fprintf(stdout, "%s: model source HF repo = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
@@ -404,7 +400,7 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
         // check model architecture kv
         keyidx = gguf_find_key(ggufctx, "general.architecture");
         if (keyidx != -1) {
-            if ( strcmp(gguf_get_val_str(ggufctx, keyidx), "gptneox") != 0) {
+            if ( strcmp(gguf_get_val_str(ggufctx, keyidx), "gptj") != 0) {
                 fprintf(stdout, "%s: model architecture not supported!\n", __func__);
                 return false;
             }
@@ -422,25 +418,25 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
         bool ok = true;
         int keyidx;
 
-        if (ok) { keyidx = gguf_find_key(ggufctx, "gptneox.context_length");
+        if (ok) { keyidx = gguf_find_key(ggufctx, "gptj.context_length");
                   if (keyidx != -1) { hparams.n_ctx = gguf_get_val_u32(ggufctx, keyidx); } else { ok = false; }  }
 
-        if (ok) { keyidx = gguf_find_key(ggufctx, "gptneox.embedding_length");
+        if (ok) { keyidx = gguf_find_key(ggufctx, "gptj.embedding_length");
                   if (keyidx != -1) { hparams.n_embd = gguf_get_val_u32(ggufctx, keyidx); } else { ok = false; }  }
 
-        if (ok) { keyidx = gguf_find_key(ggufctx, "gptneox.attention.head_count");
+        if (ok) { keyidx = gguf_find_key(ggufctx, "gptj.attention.head_count");
                   if (keyidx != -1) { hparams.n_head = gguf_get_val_u32(ggufctx, keyidx); } else { ok = false; }  }
 
-        if (ok) { keyidx = gguf_find_key(ggufctx, "gptneox.block_count");
+        if (ok) { keyidx = gguf_find_key(ggufctx, "gptj.block_count");
                   if (keyidx != -1) { hparams.n_block = gguf_get_val_u32(ggufctx, keyidx); } else { ok = false; }  }
 
-        if (ok) { keyidx = gguf_find_key(ggufctx, "gptneox.rope.dimension_count");
+        if (ok) { keyidx = gguf_find_key(ggufctx, "gptj.rope.dimension_count");
                   if (keyidx != -1) { hparams.n_rot = gguf_get_val_u32(ggufctx, keyidx); } else { ok = false; }  }
 
-        if (ok) { keyidx = gguf_find_key(ggufctx, "gptneox.use_parallel_residual");
+        if (ok) { keyidx = gguf_find_key(ggufctx, "gptj.use_parallel_residual");
                   if (keyidx != -1) { hparams.par_res = gguf_get_val_bool(ggufctx, keyidx); } else { ok = false; }  }
 
-        if (ok) { keyidx = gguf_find_key(ggufctx, "gptneox.attention.layer_norm_epsilon");
+        if (ok) { keyidx = gguf_find_key(ggufctx, "gptj.attention.layer_norm_epsilon");
                   if (keyidx != -1) { hparams.norm_eps= gguf_get_val_f32(ggufctx, keyidx); } else { ok = false; }  }
 
         if (!ok) {
@@ -469,8 +465,10 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
                 hparams.vocab_type = LLAMA_VOCAB_TYPE_BPE;
             } else {
                 hparams.vocab_type = LLAMA_VOCAB_TYPE_SPM;
+                fprintf(stdout, "%s: tokenizer model not supported! use default tokenizer.\n", __func__);
+                // fprintf(stdout, "%s: tokenizer model not supported!\n", __func__);
+                // return false;
             }
-            printf("%s: vocab type = %s\n", __func__, hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE ? "bpe" : "spm");
         } else {
             fprintf(stdout, "%s: tokenizer model not found!\n", __func__);
             return false;
@@ -486,10 +484,11 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
 
         hparams.n_vocab = gguf_get_arr_n(ggufctx,tokens_keyidx);
         fprintf(stdout, "%s: tokenizer vocab  = %zu\n", __func__, hparams.n_vocab);
+
         for (size_t i = 0; i < hparams.n_vocab; i++) {
             std::string word = gguf_get_arr_str(ggufctx, tokens_keyidx, i);
 
-//            printf("token %d = '%s'\n",i,word.c_str() );
+        //    printf("token %d = '%s'\n",i,word.c_str() );
 
             vocab.token_to_id[word] = i;
             vocab.id_to_token[i] = word;
@@ -572,17 +571,18 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
         const int n_block = model.hparams.n_block;
 
         model.blocks.resize(n_block);
-
         model.wte    = ggml_get_tensor(ctx, "token_embd.weight");
         model.ln_f_g = ggml_get_tensor(ctx, "output_norm.weight");
         model.ln_f_b = ggml_get_tensor(ctx, "output_norm.bias");
         model.lmh_g  = ggml_get_tensor(ctx, "output.weight");
+        model.lmh_b  = ggml_get_tensor(ctx, "output.bias");
 
         // map by name
         model.tensors["token_embd.weight"] = model.wte;
         model.tensors["output_norm.weight"] = model.ln_f_g;
         model.tensors["output_norm.bias"]   = model.ln_f_b;
         model.tensors["output.weight"] = model.lmh_g;
+        model.tensors["output.bias"] = model.lmh_b;
 
         for (int i = 0; i < n_block; ++i) {
             auto & block = model.blocks[i];
@@ -592,14 +592,11 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
             block.ln_1_g          = get_tensor_ex(ctx, blocknamestart + "attn_norm.weight" );
             block.ln_1_b          = get_tensor_ex(ctx, blocknamestart + "attn_norm.bias" );
 
-            block.c_attn_attn_w   = get_tensor_ex(ctx, blocknamestart + "attn_qkv.weight" );
-            block.c_attn_attn_b   = get_tensor_ex(ctx ,blocknamestart + "attn_qkv.bias" );
+            block.c_attn_q_proj_w   = get_tensor_ex(ctx, blocknamestart + "attn.q_proj.weight" );
+            block.c_attn_k_proj_w   = get_tensor_ex(ctx ,blocknamestart + "attn.k_proj.weight" );
+            block.c_attn_v_proj_w   = get_tensor_ex(ctx ,blocknamestart + "attn.v_proj.weight" );
 
             block.c_attn_proj_w   = get_tensor_ex(ctx, blocknamestart + "attn_output.weight" );
-            block.c_attn_proj_b   = get_tensor_ex(ctx, blocknamestart + "attn_output.bias" );
-
-            block.ln_2_g          = get_tensor_ex(ctx, blocknamestart + "ffn_norm.weight" );
-            block.ln_2_b          = get_tensor_ex(ctx, blocknamestart + "ffn_norm.bias");
 
             block.c_mlp_fc_w      = get_tensor_ex(ctx, blocknamestart + "ffn_up.weight" );
             block.c_mlp_fc_b      = get_tensor_ex(ctx, blocknamestart + "ffn_up.bias" );
@@ -608,23 +605,20 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
             block.c_mlp_proj_b    = get_tensor_ex(ctx, blocknamestart + "ffn_down.bias" );
 
             // map by name
-            model.tensors[blocknamestart + "attn_norm.weight"] = block.ln_1_g;
-            model.tensors[blocknamestart + "attn_norm.bias"]   = block.ln_1_b;
+            model.tensors[blocknamestart + "attn_norm.weight"]   = block.ln_1_g;
+            model.tensors[blocknamestart + "attn_norm.bias"]     = block.ln_1_b;
 
-            model.tensors[blocknamestart + "attn_qkv.weight"] = block.c_attn_attn_w;
-            model.tensors[blocknamestart + "attn_qkv.bias"]   = block.c_attn_attn_b;
+            model.tensors[blocknamestart + "attn.q_proj.weight"] = block.c_attn_q_proj_w;
+            model.tensors[blocknamestart + "attn.k_proj.weight"] = block.c_attn_k_proj_w;
+            model.tensors[blocknamestart + "attn.v_proj.weight"] = block.c_attn_v_proj_w;
 
             model.tensors[blocknamestart + "attn_output.weight"] = block.c_attn_proj_w;
-            model.tensors[blocknamestart + "attn_output.bias"]   = block.c_attn_proj_b;
 
-            model.tensors[blocknamestart + "ffn_norm.weight"] = block.ln_2_g;
-            model.tensors[blocknamestart + "ffn_norm.bias"]   = block.ln_2_b;
+            model.tensors[blocknamestart + "ffn_up.weight"]   = block.c_mlp_fc_w;
+            model.tensors[blocknamestart + "ffn_up.bias"]     = block.c_mlp_fc_b;
 
-            model.tensors[blocknamestart + "ffn_up.weight"] = block.c_mlp_fc_w;
-            model.tensors[blocknamestart + "ffn_up.bias"]   = block.c_mlp_fc_b;
-
-            model.tensors[blocknamestart + "ffn_down.weight"] = block.c_mlp_proj_w;
-            model.tensors[blocknamestart + "ffn_down.bias"]   = block.c_mlp_proj_b;
+            model.tensors[blocknamestart + "ffn_down.weight"]  = block.c_mlp_proj_w;
+            model.tensors[blocknamestart + "ffn_down.bias"]    = block.c_mlp_proj_b;
         }
     }
 
@@ -668,31 +662,6 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt2
     return true;
 }
 
-
-// feed-forward network
-ggml_tensor * gpt_neox_ff(
-        const gpt_neox_block &block,
-        ggml_context * ctx0,
-        ggml_tensor * inp,
-        const gpt_neox_hparams &hparams) {
-
-    ggml_tensor * cur = ggml_norm(ctx0, inp, hparams.norm_eps);
-
-    cur = ggml_add(ctx0, ggml_mul(ctx0, ggml_repeat(ctx0, block.ln_2_g, cur), cur), ggml_repeat(ctx0, block.ln_2_b, cur));
-    cur = ggml_mul_mat(ctx0, block.c_mlp_fc_w, cur);
-    cur = ggml_add(ctx0, ggml_repeat(ctx0, block.c_mlp_fc_b, cur), cur);
-
-    // GELU activation
-    cur = ggml_gelu(ctx0, cur);
-
-    // projection
-    // cur = proj_w*cur + proj_b
-    cur = ggml_mul_mat(ctx0, block.c_mlp_proj_w, cur);
-
-    cur = ggml_add(ctx0, ggml_repeat(ctx0, block.c_mlp_proj_b, cur), cur);
-    return cur;
-}
-
 // evaluate the transformer
 //
 //   - model:     the model
@@ -701,11 +670,11 @@ ggml_tensor * gpt_neox_ff(
 //   - embd_inp:  the embeddings of the tokens in the context
 //   - embd_w:    the predicted logits for the next token
 //
-bool gpt_neox_eval(
-        const gpt_neox_model & model,
+bool gptj_eval(
+        const gptj_model & model,
         const int n_threads,
         const int n_past,
-        const std::vector<gpt2bpe_vocab::id> & embd_inp,
+        const std::vector<int32_t> & embd_inp,
               std::vector<float>         & embd_w,
               size_t                     & mem_per_token) {
     const int N = embd_inp.size();
@@ -722,13 +691,8 @@ bool gpt_neox_eval(
     static size_t buf_size = 4*256u*1024*1024;
     static void * buf = malloc(buf_size);
 
-    // use 2 scratch buffers
-    // TODO: very hacky solution - reimplement in a more elegant way
-    static size_t scr0_size = 256u*1024*1024;
-    static void * scr0 = malloc(scr0_size);
-
-    static size_t scr1_size = 256u*1024*1024;
-    static void * scr1 = malloc(scr1_size);
+    // static size_t scr0_size = 256u*1024*1024;
+    // static void * scr0 = malloc(scr0_size);
 
     if (mem_per_token > 0 && mem_per_token*N > buf_size) {
         const size_t buf_size_new = 1.1*(mem_per_token*N); // add 10% to account for ggml object overhead
@@ -762,36 +726,30 @@ bool gpt_neox_eval(
     for (int il = 0; il < n_block; ++il) {
         struct ggml_tensor * cur;
 
-        ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
+        // ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
+
+        // norm
+        {
+            cur = ggml_norm(ctx0, inpL, model.hparams.norm_eps);
+
+            // cur = ln_1_g*cur + ln_1_b
+            cur = ggml_add(ctx0,
+                    ggml_mul(ctx0,
+                        ggml_repeat(ctx0, model.blocks[il].ln_1_g, cur),
+                        cur),
+                    ggml_repeat(ctx0, model.blocks[il].ln_1_b, cur));
+        }
+
+        struct ggml_tensor * inpSA = cur;
 
         // self-attention
         {
-            {
-                cur = ggml_norm(ctx0, inpL, hparams.norm_eps);
-
-                cur = ggml_add(ctx0,
-                        ggml_mul(ctx0, ggml_repeat(ctx0, model.blocks[il].ln_1_g, cur), cur),
-                        ggml_repeat(ctx0, model.blocks[il].ln_1_b, cur));
-            }
-
-            // compute QKV
-            {
-
-                cur = ggml_mul_mat(ctx0, model.blocks[il].c_attn_attn_w, cur);
-                cur = ggml_add(ctx0, ggml_repeat(ctx0, model.blocks[il].c_attn_attn_b, cur), cur);
-            }
-
-            struct ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd/n_head, n_head, N, cur->nb[1]/n_head, cur->nb[1], 0*sizeof(float)*n_embd/n_head));
-            struct ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd/n_head, n_head, N, cur->nb[1]/n_head, cur->nb[1], 1*sizeof(float)*n_embd/n_head));
-            struct ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd/n_head, n_head, N, cur->nb[1]/n_head, cur->nb[1], 2*sizeof(float)*n_embd/n_head));
-
-            // using mode = 2 for GPT-NeoX mode
-            Qcur = ggml_rope_inplace(ctx0, Qcur, n_past, n_rot, 2, 0);
-            Kcur = ggml_rope_inplace(ctx0, Kcur, n_past, n_rot, 2, 0);
+            struct ggml_tensor * Qcur = ggml_rope_inplace(ctx0, ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, model.blocks[il].c_attn_q_proj_w, cur), n_embd/n_head, n_head, N), n_past, n_rot, 0, 0);
+            struct ggml_tensor * Kcur = ggml_rope_inplace(ctx0, ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, model.blocks[il].c_attn_k_proj_w, cur), n_embd/n_head, n_head, N), n_past, n_rot, 0, 0);
 
             // store key and value to memory
             {
-                Vcur = ggml_transpose(ctx0, ggml_reshape_2d(ctx0, Vcur, n_embd, N));
+                struct ggml_tensor * Vcur = ggml_transpose(ctx0, ggml_mul_mat(ctx0, model.blocks[il].c_attn_v_proj_w, cur));
 
                 struct ggml_tensor * k = ggml_view_1d(ctx0, model.memory_k, N*n_embd, (ggml_element_size(model.memory_k)*n_embd)*(il*n_ctx + n_past));
                 struct ggml_tensor * v = ggml_view_2d(ctx0, model.memory_v, N, n_embd,
@@ -803,7 +761,10 @@ bool gpt_neox_eval(
             }
 
             // Q = Qcur.contiguous().view(n_embd/n_head, n_head, N).permute(0, 2, 1, 3)
-            struct ggml_tensor * Q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
+            struct ggml_tensor * Q =
+                ggml_permute(ctx0,
+                        Qcur,
+                        0, 2, 1, 3);
 
             // K = Kmem.view(n_embd/n_head, n_head, n_past + N).permute(0, 2, 1, 3)
             struct ggml_tensor * K =
@@ -844,44 +805,58 @@ bool gpt_neox_eval(
             struct ggml_tensor * KQV_merged = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
 
             // cur = KQV_merged.contiguous().view(n_embd, N)
-            cur = ggml_cpy(ctx0, KQV_merged, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, N));
+            cur = ggml_cpy(ctx0,
+                    KQV_merged,
+                    ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, N));
+
+            // projection (no bias)
+            cur = ggml_mul_mat(ctx0,
+                    model.blocks[il].c_attn_proj_w,
+                    cur);
+        }
+
+        struct ggml_tensor * inpFF = cur;
+
+        // feed-forward network
+        // this is independent of the self-attention result, so it could be done in parallel to the self-attention
+        {
+            // note here we pass inpSA instead of cur
+            cur = ggml_mul_mat(ctx0,
+                    model.blocks[il].c_mlp_fc_w,
+                    inpSA);
+
+            cur = ggml_add(ctx0,
+                    ggml_repeat(ctx0, model.blocks[il].c_mlp_fc_b, cur),
+                    cur);
+
+            // GELU activation
+            cur = ggml_gelu(ctx0, cur);
 
             // projection
-            {
-                cur = ggml_mul_mat(ctx0, model.blocks[il].c_attn_proj_w, cur);
-                cur = ggml_add(ctx0, ggml_repeat(ctx0, model.blocks[il].c_attn_proj_b, cur), cur);
-            }
+            // cur = proj_w*cur + proj_b
+            cur = ggml_mul_mat(ctx0,
+                    model.blocks[il].c_mlp_proj_w,
+                    cur);
+
+            cur = ggml_add(ctx0,
+                    ggml_repeat(ctx0, model.blocks[il].c_mlp_proj_b, cur),
+                    cur);
         }
 
-        ggml_set_scratch(ctx0, { 0, scr1_size, scr1, });
+        // self-attention + FF
+        cur  = ggml_add(ctx0, cur, inpFF);
 
-        if (hparams.par_res == 0) {
-            struct ggml_tensor * inpFF = ggml_add(ctx0, cur, inpL);
+        // input for next layer
+        inpL = ggml_add(ctx0, cur, inpL);
 
-            cur = gpt_neox_ff(model.blocks[il], ctx0, inpFF, hparams);
 
-            // input for next layer
-            inpL = ggml_add(ctx0, cur, inpFF);
-        } else {
-            struct ggml_tensor * inpFF = cur;
-
-            // this is independent of the self-attention result, so it could be done in parallel to the self-attention
-            // note here we pass inpL instead of cur
-            cur = gpt_neox_ff(model.blocks[il], ctx0, inpL, hparams);
-
-            // layer input + FF
-            cur  = ggml_add(ctx0, cur, inpFF);
-
-            // input for next layer
-            inpL = ggml_add(ctx0, cur, inpL);
-        }
     }
 
-    ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
+    // ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
 
     // norm
     {
-        inpL = ggml_norm(ctx0, inpL, hparams.norm_eps);
+        inpL = ggml_norm(ctx0, inpL, model.hparams.norm_eps);
 
         // inpL = ln_f_g*inpL + ln_f_b
         inpL = ggml_add(ctx0,
@@ -891,15 +866,15 @@ bool gpt_neox_eval(
                 ggml_repeat(ctx0, model.ln_f_b, inpL));
     }
 
-    ggml_set_scratch(ctx0, { 0, 0, nullptr, });
+    // ggml_set_scratch(ctx0, { 0, 0, nullptr, });
 
     // lm_head
     {
         inpL = ggml_mul_mat(ctx0, model.lmh_g, inpL);
 
-        //inpL = ggml_add(ctx0,
-        //        ggml_repeat(ctx0, model.lmh_b, inpL),
-        //        inpL);
+        inpL = ggml_add(ctx0,
+                ggml_repeat(ctx0, model.lmh_b, inpL),
+                inpL);
     }
 
     // logits -> probs
@@ -911,7 +886,7 @@ bool gpt_neox_eval(
 
     //if (n_past%100 == 0) {
     //    ggml_graph_print   (&gf);
-    //    ggml_graph_dump_dot(&gf, NULL, "gpt-2.dot");
+    //    ggml_graph_dump_dot(&gf, NULL, "gpt-j.dot");
     //}
 
     //embd_w.resize(n_vocab*N);
@@ -946,13 +921,13 @@ int main(int argc, char ** argv) {
 
     gpt2bpe_vocab vocab;
     llama_vocab vocab_spm;
-    gpt_neox_model model;
+    gptj_model model;
 
     // load the model
     {
         const int64_t t_start_us = ggml_time_us();
 
-        if (!gpt_neox_model_load(params.model, model, vocab)) {
+        if (!gptj_model_load(params.model, model, vocab)) {
             fprintf(stderr, "%s: failed to load model from '%s'\n", __func__, params.model.c_str());
             return 1;
         }
@@ -974,6 +949,7 @@ int main(int argc, char ** argv) {
 
         // bpe to spm
         if (model.hparams.vocab_type == LLAMA_VOCAB_TYPE_SPM) {
+            vocab_spm.type = model.hparams.vocab_type;
             vocab_spm.special_bos_id = vocab.special_bos_id;
             vocab_spm.special_eos_id = vocab.special_eos_id;
             vocab_spm.special_unk_id = vocab.special_unk_id;
@@ -982,15 +958,11 @@ int main(int argc, char ** argv) {
             vocab_spm.linefeed_id = vocab.linefeed_id;
             vocab_spm.token_to_id = vocab.token_to_id;
             auto & ggufctx = model.ggufctx;
-
-            // scores
             const int score_idx = gguf_find_key(ggufctx, "tokenizer.ggml.scores");
             if (score_idx == -1) {
                 throw std::runtime_error("cannot find tokenizer scores in model file\n");
             }
             const float * scores = (const float * ) gguf_get_arr_data(ggufctx, score_idx);
-
-            // token types
             const int toktype_idx = gguf_find_key(ggufctx, "tokenizer.ggml.token_type");
             if (toktype_idx == -1) {
                 throw std::runtime_error("cannot find token type list in GGUF file\n");
@@ -1005,13 +977,12 @@ int main(int argc, char ** argv) {
                 token.score = scores[i];
                 token.type =  (llama_token_type) toktypes[i];
                 id_to_token[i] = token;
-                // printf("txt:%s s:%f tp:%d\n",token.text.c_str(), token.score, token.type );
+                // if (i < 1000) printf("id: %u txt:%s s:%f tp:%d\n",i, token.text.c_str(), token.score, token.type );
             }
             vocab_spm.id_to_token = id_to_token;
         }
 
         t_load_us = ggml_time_us() - t_start_us;
-
     }
 
     if (params.seed < 0) {
@@ -1030,6 +1001,7 @@ int main(int argc, char ** argv) {
     printf("%s: repeat_penalty = %.3f\n", __func__, params.repeat_penalty);
 
     std::mt19937 rng(params.seed);
+
     std::vector<int32_t> last_n_tokens(model.hparams.n_ctx);
     std::fill(last_n_tokens.begin(), last_n_tokens.end(), 0);
 
@@ -1041,14 +1013,15 @@ int main(int argc, char ** argv) {
     std::vector<float> logits;
 
     // tokenize the prompt
-    std::vector<gpt2bpe_vocab::id> embd_inp = model.hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE ?
+    std::vector<int32_t> embd_inp = model.hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE ?
         gpt2bpe_tokenize(vocab, params.prompt,false, false) : spm_tokenize(vocab_spm, params.prompt, false, false);
+
     params.n_predict = std::min(params.n_predict, model.hparams.n_ctx - (int) embd_inp.size());
 
     printf("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size());
-//    for (size_t i = 0; i < embd_inp.size(); i++) {
-//        printf("%s: token[%zu] = %6d, %s\n", __func__, i, embd_inp[i], vocab.id_to_token[embd_inp[i]].c_str());
-//    }
+   for (size_t i = 0; i < embd_inp.size(); i++) {
+       printf("%s: token[%zu] = %6d, %s\n", __func__, i, embd_inp[i], vocab.id_to_token[embd_inp[i]].c_str());
+   }
 
     if( model.hparams.n_ctx < params.n_predict+embd_inp.size() ) {
         params.n_predict = model.hparams.n_ctx-embd_inp.size();
@@ -1057,18 +1030,18 @@ int main(int argc, char ** argv) {
     printf("%s: n_predict = %d\n", __func__, params.n_predict);
     printf("\n");
 
-    std::vector<gpt2bpe_vocab::id> embd;
+    std::vector<int32_t> embd;
 
     // determine the required inference memory per token:
     size_t mem_per_token = 0;
-    gpt_neox_eval(model, params.n_threads, 0, { 0, 1, 2, 3 }, logits, mem_per_token);
+    gptj_eval(model, params.n_threads, 0, { 0, 1, 2, 3 }, logits, mem_per_token);
 
     for (size_t i = embd.size(); i < embd_inp.size() + params.n_predict; i++) {
         // predict
         if (embd.size() > 0) {
             const int64_t t_start_us = ggml_time_us();
 
-            if (!gpt_neox_eval(model, params.n_threads, n_past, embd, logits, mem_per_token)) {
+            if (!gptj_eval(model, params.n_threads, n_past, embd, logits, mem_per_token)) {
                 printf("Failed to predict\n");
                 return 1;
             }
@@ -1089,11 +1062,12 @@ int main(int argc, char ** argv) {
 
             const int n_vocab = model.hparams.n_vocab;
 
-            gpt2bpe_vocab::id id = 0;
+            int32_t id = 0;
 
             {
                 const int64_t t_start_sample_us = ggml_time_us();
-                int n_logits = model.hparams.vocab_type == LLAMA_VOCAB_TYPE_BPE ? vocab.id_to_token.size() : vocab_spm.id_to_token.size();
+                size_t n_logits = model.hparams.vocab_type == LLAMA_VOCAB_TYPE_SPM ? vocab_spm.id_to_token.size() : vocab.id_to_token.size();
+
                 id = sample_top_k_top_p_repeat(n_logits, logits.data() + (logits.size() - n_vocab), last_n_tokens.data(), last_n_tokens.size(), top_k, top_p, temp, repeat_last_n, repeat_penalty, rng);
 
                 last_n_tokens.erase(last_n_tokens.begin());
@@ -1118,10 +1092,12 @@ int main(int argc, char ** argv) {
         // display text
         for (auto id : embd) {
             if (model.hparams.vocab_type == LLAMA_VOCAB_TYPE_SPM) {
+                // printf("%s", vocab_spm.id_to_token[id].text.c_str());
                 printf("%s", llama_token_to_text(vocab_spm, id).c_str());
             } else {
                 printf("%s", vocab.id_to_token[id].c_str());
             }
+            
         }
 
         // sep of text token
