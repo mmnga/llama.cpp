@@ -1431,7 +1431,7 @@ struct llama_model_loader {
 
     struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, ggml_backend backend) {
         struct ggml_tensor * cur = ggml_get_tensor(ctx_meta, name.c_str());
-        printf("%s %s %zu %zu %zu %zu\n", __func__, name.c_str(), ne[0], ne[1] > 10000000000 ? 1 : ne[1] , ne[2] > 10000000000 ? 1 : ne[2], ne[3] > 10000000000 ? 1 : ne[3]);
+        // printf("%s %s %zu %zu %zu %zu\n", __func__, name.c_str(), ne[0], ne[1] > 10000000000 ? 1 : ne[1] , ne[2] > 10000000000 ? 1 : ne[2], ne[3] > 10000000000 ? 1 : ne[3]);
 
         if (cur == NULL) {
             throw std::runtime_error(format("%s: tensor '%s' not found", __func__, name.c_str()));
@@ -1736,14 +1736,14 @@ static void llm_load_vocab(
     }
 
     const int score_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str());
-    if (score_idx == -1) {
+    if (score_idx == -1 && model.arch == LLM_ARCH_LLAMA) {
         throw std::runtime_error("cannot find tokenizer scores in model file\n");
     }
 
     const float * scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
 
     const int toktype_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str());
-    if (toktype_idx == -1) {
+    if (toktype_idx == -1 && model.arch == LLM_ARCH_LLAMA) {
         throw std::runtime_error("cannot find token type list in GGUF file\n");
     }
 
@@ -1816,8 +1816,8 @@ static void llm_load_vocab(
 
         auto & token_data = vocab.id_to_token[i];
         token_data.text  = std::move(word);
-        token_data.score = scores[i];
-        token_data.type  = (llama_token_type) toktypes[i];
+        token_data.score = score_idx   > -1 ? scores[i] : 0.0;
+        token_data.type  = toktype_idx > -1 ? (llama_token_type) toktypes[i] : LLAMA_TOKEN_TYPE_NORMAL;
     }
 
     // determine the newline token: LLaMA "<0x0A>" == 10 == '\n', Falcon 193 == '\n'
@@ -2097,18 +2097,6 @@ static void llm_load_tensors(
                 } break;
             case LLM_ARCH_GPTNEOX:
                 {
-        // LLM_ARCH_GPTNEOX,
-        // {
-        //     { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
-        //     { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
-        //     { LLM_TENSOR_OUTPUT,          "output" },
-        //     { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
-        //     { LLM_TENSOR_ATTN_QKV,        "blk.%d.attn_qkv" },
-        //     { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
-        //     { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
-        //     { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
-        //     { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
-        // },
                     // TODO: CPU-only for now
 
                     model.tok_embeddings = ml.create_tensor(ctx, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, GGML_BACKEND_CPU);
@@ -2151,45 +2139,24 @@ static void llm_load_tensors(
                     const int i_gpu_start = n_layer - n_gpu_layers;
 
                     model.layers.resize(n_layer);
-// printf("test loading\n");
-
+                    
                     for (uint32_t i = 0; i < n_layer; ++i) {
                         const ggml_backend backend       = int(i) < i_gpu_start ? GGML_BACKEND_CPU : LLAMA_BACKEND_OFFLOAD; // NOLINT
                         const ggml_backend backend_split = int(i) < i_gpu_start ? GGML_BACKEND_CPU : LLAMA_BACKEND_OFFLOAD_SPLIT; // NOLINT
-                        printf("backend GGML_BACKEND_GPU %d ");
 
                         auto & layer = model.layers[i];
-printf(" - layer %zu loading ", i);
-
-                        printf("attn_norm ");
-                        layer.attn_norm   = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,   "weight", i), {n_embd}, backend);
-                        printf("attn_norm_b ");
-                        layer.attn_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,   "bias", i),   {n_embd}, backend);
-
-                        printf("wqkv ");
-                        layer.wqkv = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, backend_split);
-                        printf("wqkv_b ");
-                        layer.wqkv_b = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "bias", i), {n_embd + 2*n_embd_gqa}, backend_split);
-
-                        printf("wo ");
-                        layer.wo   = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd},                backend_split);
-                        printf("wo_b ");
-                        layer.wo_b   = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},                backend_split);
-
-                        printf("ffn_norm ");
-                        layer.ffn_norm = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, backend);
-                        printf("ffn_norm_b ");
-                        layer.ffn_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "bias", i), {n_embd}, backend);
-
-                        printf("w2 ");
-                        layer.w2 = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, backend_split);
-                        printf("w2_b ");
-                        layer.w2_b = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "bias", i), {n_embd}, backend_split);
-
-                        printf("w3 ");
-                        layer.w3 = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, backend_split);
-                        printf("w3_b ");
-                        layer.w3_b = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff}, backend_split);
+                        layer.attn_norm   = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,"weight", i), {n_embd}, backend);
+                        layer.attn_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,"bias",   i), {n_embd}, backend);
+                        layer.wqkv        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, backend_split);
+                        layer.wqkv_b      = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "bias",   i), {n_embd + 2*n_embd_gqa}, backend_split);
+                        layer.wo          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, backend_split);
+                        layer.wo_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd}, backend_split);
+                        layer.ffn_norm    = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, backend);
+                        layer.ffn_norm_b  = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "bias",   i), {n_embd}, backend);
+                        layer.w2          = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, backend_split);
+                        layer.w2_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "bias",   i), {n_embd}, backend_split);
+                        layer.w3          = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, backend_split);
+                        layer.w3_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "bias"  , i), {n_ff}, backend_split);
 
                         if (backend == GGML_BACKEND_GPU) {
                             vram_weights +=
@@ -2200,7 +2167,6 @@ printf(" - layer %zu loading ", i);
                                 ggml_nbytes(layer.w2)        + ggml_nbytes(layer.w2_b)        +
                                 ggml_nbytes(layer.w3)        + ggml_nbytes(layer.w3_b);
                         }
-printf("\n");fflush(stdout);
                     }
                 } break;
             default:
@@ -3087,7 +3053,6 @@ static struct ggml_cgraph * llm_build_gptneox(
     ggml_set_name(KQ_scale, "1/sqrt(n_embd_head)");
 
     for (int il = 0; il < n_layer; ++il) {
-        struct ggml_tensor * attn_norm;
 
         offload_func_t offload_func = llama_nop;
 
@@ -3114,46 +3079,24 @@ static struct ggml_cgraph * llm_build_gptneox(
             }
 
             // compute QKV
-            // cur = ggml_mul_mat(ctx0, model.layers[il].wqkv, cur);
-            // offload_func_kq(cur);
-
-            // cur = ggml_add(ctx0, cur, model.layers[il].wqkv_b);
-            // offload_func_kq(cur);
-
-            cur = ggml_add(ctx0,
-                    ggml_mul_mat(ctx0, model.layers[il].wqkv, cur),
-                    model.layers[il].wqkv_b);
-            offload_func_kq(cur->src[0]);
-            offload_func_kq(cur);
-
-            // struct ggml_tensor * tmpq = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd_head, n_head, N,
-            //     36864/n_head, 
-            //     36864, 
-            //     0*sizeof(float)*n_embd_head));
-            // offload_func_kq(tmpq);
-
-            // struct ggml_tensor * tmpk = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd_head, n_head, N, 
-            //     36864/n_head, 
-            //     36864, 
-            //     1*sizeof(float)*n_embd_head));
-            // offload_func_kq(tmpk);
-
-            // struct ggml_tensor * tmpv = ggml_view_3d(ctx0, cur, n_embd_head, n_head, N, 
-            //     36864/n_head, 
-            //     36864, 
-            //     2*sizeof(float)*n_embd_head);
-            // offload_func_v(tmpv);
+            {
+                cur = ggml_add(ctx0,
+                        ggml_mul_mat(ctx0, model.layers[il].wqkv, cur),
+                        model.layers[il].wqkv_b);
+                offload_func_kq(cur->src[0]);
+                offload_func_kq(cur);
+            }
             
             struct ggml_tensor * tmpq = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd_head, n_head, N,
                 cur->nb[1]/n_head, 
                 cur->nb[1], 
-                0*sizeof(float)*n_embd_head));
+                0));
             offload_func_kq(tmpq);
 
             struct ggml_tensor * tmpk = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd_head, n_head, N, 
                 cur->nb[1]/n_head, 
                 cur->nb[1], 
-                1*sizeof(float)*n_embd_head));
+                sizeof(float)*n_embd_head));
             offload_func_kq(tmpk);
 
             // using mode = 2 for GPT-NeoX mode
@@ -3164,14 +3107,12 @@ static struct ggml_cgraph * llm_build_gptneox(
             offload_func_kq(Kcur);
 
             {
-
                 struct ggml_tensor * tmpv = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd_head, n_head, N, 
                     cur->nb[1]/n_head, 
                     cur->nb[1], 
                     2*sizeof(float)*n_embd_head));
                 offload_func_v(tmpv);
 
-                // struct ggml_tensor * Vcur = ggml_transpose(ctx0, ggml_reshape_2d(ctx0, ggml_cont(ctx0, tmpv), n_embd_gqa, N));
                 struct ggml_tensor * Vcur = ggml_transpose(ctx0, ggml_reshape_2d(ctx0, tmpv, n_embd_gqa, N));
                 offload_func_v(Vcur);
                 offload_func_v(Vcur->src[0]);
@@ -3243,14 +3184,14 @@ static struct ggml_cgraph * llm_build_gptneox(
             ggml_set_name(cur, "KQV_merged_contiguous");
 
             // projection
-            cur = ggml_mul_mat(ctx0, model.layers[il].wo, cur);
+            cur = ggml_add(ctx0,
+                    ggml_mul_mat(ctx0, model.layers[il].wo, cur),
+                    model.layers[il].wo_b);
+            offload_func(cur->src[0]);
             offload_func(cur);
-            cur = ggml_add(ctx0, cur, model.layers[il].wo_b);
-            offload_func(cur);
+
             ggml_set_name(cur, "result_wo");
         }
-
-        struct ggml_tensor * attn_out = cur;
 
         // feed forward
         {
@@ -3260,29 +3201,33 @@ static struct ggml_cgraph * llm_build_gptneox(
                 cur = ggml_norm(ctx0, inpFF, norm_eps);
                 offload_func(cur);
 
-                cur = ggml_mul(ctx0, cur, model.layers[il].ffn_norm);
-                offload_func(cur);
-                cur = ggml_add(ctx0, cur, model.layers[il].ffn_norm_b);
-                offload_func(cur);
-
-                cur = ggml_mul_mat(ctx0, model.layers[il].w3, cur);
+                cur = ggml_add(ctx0,
+                        ggml_mul(ctx0, cur, model.layers[il].ffn_norm),
+                        model.layers[il].ffn_norm_b);
+                offload_func(cur->src[0]);
                 offload_func(cur);
 
-                cur = ggml_add(ctx0, cur, model.layers[il].w3_b);
+                cur = ggml_add(ctx0,
+                        ggml_mul_mat(ctx0, model.layers[il].w3, cur),
+                        model.layers[il].w3_b);
+                offload_func(cur->src[0]);
                 offload_func(cur);
 
                 // GELU activation
                 cur = ggml_gelu(ctx0, cur);
                 offload_func(cur);
+                ggml_set_name(cur, "GELU activation");
 
                 // projection
                 {
-                    cur = ggml_mul_mat(ctx0, model.layers[il].w2, cur);
-                    offload_func(cur);
-                    cur = ggml_add(ctx0, cur, model.layers[il].w2_b);
+                    cur = ggml_add(ctx0,
+                            ggml_mul_mat(ctx0, model.layers[il].w2, cur),
+                            model.layers[il].w2_b);
+                    offload_func(cur->src[0]);
                     offload_func(cur);
                 }
             }
+            ggml_set_name(cur, "feed_forward_output");
 
             cur = ggml_add(ctx0, cur, inpFF);
             offload_func(cur);

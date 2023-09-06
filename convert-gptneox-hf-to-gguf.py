@@ -161,9 +161,11 @@ if tokenizer_json_file.is_file():
             text = bytearray(pad_token)
 
         tokens.append(text)
+        scores.append(0.0) # dummy
         toktypes.append(gguf.TokenType.NORMAL)  # dummy
 
     gguf_writer.add_token_list(tokens)
+    gguf_writer.add_token_scores(scores)
     gguf_writer.add_token_types(toktypes)
 
     special_vocab = gguf.SpecialVocab(dir_model, load_merges = True)
