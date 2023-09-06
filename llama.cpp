@@ -2145,18 +2145,18 @@ static void llm_load_tensors(
                         const ggml_backend backend_split = int(i) < i_gpu_start ? GGML_BACKEND_CPU : LLAMA_BACKEND_OFFLOAD_SPLIT; // NOLINT
 
                         auto & layer = model.layers[i];
-                        layer.attn_norm   = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,"weight", i), {n_embd}, backend);
-                        layer.attn_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,"bias",   i), {n_embd}, backend);
-                        layer.wqkv        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, backend_split);
-                        layer.wqkv_b      = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "bias",   i), {n_embd + 2*n_embd_gqa}, backend_split);
-                        layer.wo          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, backend_split);
-                        layer.wo_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd}, backend_split);
-                        layer.ffn_norm    = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, backend);
-                        layer.ffn_norm_b  = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "bias",   i), {n_embd}, backend);
-                        layer.w2          = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, backend_split);
-                        layer.w2_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "bias",   i), {n_embd}, backend_split);
-                        layer.w3          = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, backend_split);
-                        layer.w3_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "bias"  , i), {n_ff}, backend_split);
+                        layer.attn_norm   = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,"weight", i), {n_embd},                       backend);
+                        layer.attn_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_NORM,"bias",   i), {n_embd},                       backend);
+                        layer.wqkv        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa},backend_split);
+                        layer.wqkv_b      = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "bias",   i), {n_embd + 2*n_embd_gqa},        backend);
+                        layer.wo          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd},               backend_split);
+                        layer.wo_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd},                       backend);
+                        layer.ffn_norm    = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd},                       backend);
+                        layer.ffn_norm_b  = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "bias",   i), {n_embd},                       backend);
+                        layer.w2          = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd},                 backend_split);
+                        layer.w2_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "bias",   i), {n_embd},                       backend);
+                        layer.w3          = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff},                 backend_split);
+                        layer.w3_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_UP,   "bias"  , i), {n_ff},                         backend);
 
                         if (backend == GGML_BACKEND_GPU) {
                             vram_weights +=
@@ -3071,19 +3071,19 @@ static struct ggml_cgraph * llm_build_gptneox(
                 cur = ggml_norm(ctx0, inpL, norm_eps);
                 offload_func(cur);
 
-                cur = ggml_add(ctx0,
-                        ggml_mul(ctx0, cur, model.layers[il].attn_norm),
-                        model.layers[il].attn_norm_b);
-                offload_func(cur->src[0]);
+                cur = ggml_mul(ctx0, cur, model.layers[il].attn_norm);
+                offload_func(cur);
+
+                cur = ggml_add(ctx0, cur, model.layers[il].attn_norm_b);
                 offload_func(cur);
             }
 
             // compute QKV
             {
-                cur = ggml_add(ctx0,
-                        ggml_mul_mat(ctx0, model.layers[il].wqkv, cur),
-                        model.layers[il].wqkv_b);
-                offload_func_kq(cur->src[0]);
+                cur = ggml_mul_mat(ctx0, model.layers[il].wqkv, cur);
+                offload_func_kq(cur);
+
+                cur = ggml_add(ctx0, cur, model.layers[il].wqkv_b);
                 offload_func_kq(cur);
             }
             
@@ -3184,10 +3184,10 @@ static struct ggml_cgraph * llm_build_gptneox(
             ggml_set_name(cur, "KQV_merged_contiguous");
 
             // projection
-            cur = ggml_add(ctx0,
-                    ggml_mul_mat(ctx0, model.layers[il].wo, cur),
-                    model.layers[il].wo_b);
-            offload_func(cur->src[0]);
+            cur = ggml_mul_mat(ctx0, model.layers[il].wo, cur);
+            offload_func(cur);
+
+            cur = ggml_add(ctx0, cur, model.layers[il].wo_b);
             offload_func(cur);
 
             ggml_set_name(cur, "result_wo");
@@ -3201,16 +3201,16 @@ static struct ggml_cgraph * llm_build_gptneox(
                 cur = ggml_norm(ctx0, inpFF, norm_eps);
                 offload_func(cur);
 
-                cur = ggml_add(ctx0,
-                        ggml_mul(ctx0, cur, model.layers[il].ffn_norm),
-                        model.layers[il].ffn_norm_b);
-                offload_func(cur->src[0]);
+                cur = ggml_mul(ctx0, cur, model.layers[il].ffn_norm);
                 offload_func(cur);
 
-                cur = ggml_add(ctx0,
-                        ggml_mul_mat(ctx0, model.layers[il].w3, cur),
-                        model.layers[il].w3_b);
-                offload_func(cur->src[0]);
+                cur = ggml_add(ctx0, cur, model.layers[il].ffn_norm_b);
+                offload_func(cur);
+
+                cur = ggml_mul_mat(ctx0, model.layers[il].w3, cur);
+                offload_func(cur);
+
+                cur = ggml_add(ctx0, cur, model.layers[il].w3_b);
                 offload_func(cur);
 
                 // GELU activation
@@ -3220,10 +3220,10 @@ static struct ggml_cgraph * llm_build_gptneox(
 
                 // projection
                 {
-                    cur = ggml_add(ctx0,
-                            ggml_mul_mat(ctx0, model.layers[il].w2, cur),
-                            model.layers[il].w2_b);
-                    offload_func(cur->src[0]);
+                    cur = ggml_mul_mat(ctx0, model.layers[il].w2, cur);
+                    offload_func(cur);
+
+                    cur = ggml_add(ctx0, cur, model.layers[il].w2_b);
                     offload_func(cur);
                 }
             }
