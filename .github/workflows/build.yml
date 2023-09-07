@@ -9,7 +9,7 @@ on:
         type: boolean
   push:
     branches:
-      - master
+      - mmnga-dev
     paths: ['.github/workflows/**', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu']
   pull_request:
     types: [opened, synchronize, reopened]
@@ -308,7 +308,7 @@ jobs:
         run: |
           BUILD_NUMBER="$(git rev-list --count HEAD)"
           SHORT_HASH="$(git rev-parse --short=7 HEAD)"
-          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+          if [[ "${{ env.BRANCH_NAME }}" == "mmnga-dev" ]]; then
             echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
           else
             SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
@@ -317,13 +317,13 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/mmnga-dev' ) || github.event.inputs.create_release == 'true' }}
         run: |
           Copy-Item LICENSE .\build\bin\Release\llama.cpp.txt
           7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-x64.zip .\build\bin\Release\*
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/mmnga-dev' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v3
         with:
           path: |
@@ -363,7 +363,7 @@ jobs:
         run: |
           BUILD_NUMBER="$(git rev-list --count HEAD)"
           SHORT_HASH="$(git rev-parse --short=7 HEAD)"
-          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+          if [[ "${{ env.BRANCH_NAME }}" == "mmnga-dev" ]]; then
             echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
           else
             SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
@@ -372,12 +372,12 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/mmnga-dev' ) || github.event.inputs.create_release == 'true' }}
         run: |
           7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-cu${{ matrix.cuda }}-x64.zip .\build\bin\Release\*
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/mmnga-dev' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v3
         with:
           path: |
@@ -407,14 +407,14 @@ jobs:
           7z a cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip .\build\bin\cudart\*
 
       - name: Upload Cuda runtime
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/mmnga-dev' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v3
         with:
           path: |
             cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip
 
   # release:
-  #   if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+  #   if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/mmnga-dev' ) || github.event.inputs.create_release == 'true' }}
 
   #   runs-on: ubuntu-latest
 
@@ -437,7 +437,7 @@ jobs:
   #       run: |
   #         BUILD_NUMBER="$(git rev-list --count HEAD)"
   #         SHORT_HASH="$(git rev-parse --short=7 HEAD)"
-  #         if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+  #         if [[ "${{ env.BRANCH_NAME }}" == "mmnga-dev" ]]; then
   #           echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
   #         else
   #           SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
@@ -654,18 +654,18 @@ jobs:
 #
 #      - name: Dependencies
 #        run: |
-#          wget -q https://github.com/emscripten-core/emsdk/archive/master.tar.gz
-#          tar -xvf master.tar.gz
-#          emsdk-master/emsdk update
-#          emsdk-master/emsdk install latest
-#          emsdk-master/emsdk activate latest
+#          wget -q https://github.com/emscripten-core/emsdk/archive/mmnga-dev.tar.gz
+#          tar -xvf mmnga-dev.tar.gz
+#          emsdk-mmnga-dev/emsdk update
+#          emsdk-mmnga-dev/emsdk install latest
+#          emsdk-mmnga-dev/emsdk activate latest
 #
 #      - name: Configure
 #        run: echo "tmp"
 #
 #      - name: Build
 #        run: |
-#          pushd emsdk-master
+#          pushd emsdk-mmnga-dev
 #          source ./emsdk_env.sh
 #          popd
 #          emcmake cmake . -DCMAKE_BUILD_TYPE=${{ matrix.build }}
