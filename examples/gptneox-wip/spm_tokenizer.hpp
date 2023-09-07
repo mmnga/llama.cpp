@@ -12,27 +12,6 @@
 #include <cstring>
 #include <regex>
 
-#include <stdexcept>
-#include <execinfo.h>
-static void print_stacktrace() {
-    const int max_frames = 100;
-    void* addrlist[max_frames];
-    int addrlen = backtrace(addrlist, sizeof(addrlist) / sizeof(void*));
-    
-    if (addrlen == 0) {
-        std::cerr << "No stack trace available." << std::endl;
-        return;
-    }
-
-    char** symbollist = backtrace_symbols(addrlist, addrlen);
-
-    for (int i = 1; i < addrlen; i++) {
-        std::cerr << symbollist[i] << "\n";
-    }
-    
-    free(symbollist);
-}
-
 enum llama_vocab_type {
     LLAMA_VOCAB_TYPE_SPM = 0, // SentencePiece
     LLAMA_VOCAB_TYPE_BPE = 1, // Byte Pair Encoding
