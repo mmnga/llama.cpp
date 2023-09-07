@@ -174,6 +174,15 @@ if tokenizer_json_file.is_file():
         scores.append(0.0) #dummy
         toktypes.append(gguf.TokenType.NORMAL)  # dummy
 
+    # If you do not match the vocab_size in config.json, it will not match the shape of tensor.
+    # create_tensor: tensor 'token_embd.weight' has wrong shape
+    if hparams["vocab_size"] > len(tokens):
+        remaining = hparams["vocab_size"] - len(tokens)
+        for i in range(remaining):
+            tokens.append(bytearray([])) # dummy
+            scores.append(0.0) # dummy
+            toktypes.append(gguf.TokenType.NORMAL)  # dummy
+
     gguf_writer.add_token_list(tokens)
     gguf_writer.add_token_scores(scores)
     gguf_writer.add_token_types(toktypes)
@@ -187,9 +196,9 @@ if tokenizer_json_file.is_file():
 else:
 
     # spm tokenizer
-    gguf_writer.add_tokenizer_model("spm")
+    gguf_writer.add_tokenizer_model("llama")
 
-    print("gguf: get spm tokenizer vocab")
+    print("gguf: get llama spm tokenizer vocab")
 
     # added tokens
     added_tokens_json_file = dir_model / 'added_tokens.json'
@@ -233,6 +242,15 @@ else:
         tokens.append(text)
         scores.append(score)
         toktypes.append(toktype)
+
+    # If you do not match the vocab_size in config.json, it will not match the shape of tensor.
+    # create_tensor: tensor 'token_embd.weight' has wrong shape
+    if hparams["vocab_size"] > len(tokens):
+        remaining = hparams["vocab_size"] - len(tokens)
+        for i in range(remaining):
+            tokens.append(bytearray([])) # dummy
+            scores.append(0.0) # dummy
+            toktypes.append(gguf.TokenType.NORMAL)  # dummy
 
     gguf_writer.add_token_list(tokens)
     gguf_writer.add_token_scores(scores)
