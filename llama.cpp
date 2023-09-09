@@ -2243,19 +2243,6 @@ static void llm_load_tensors(
                         }
                     }
                 } break;
-        // LLM_ARCH_GPT2,
-        // {
-        //     { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
-        //     { LLM_TENSOR_POS_EMBD,        "pos_embd" },
-        //     { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
-        //     { LLM_TENSOR_OUTPUT,          "output" },
-        //     { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
-        //     { LLM_TENSOR_ATTN_NORM_2,     "blk.%d.attn_norm_2" },
-        //     { LLM_TENSOR_ATTN_QKV,        "blk.%d.attn_qkv" },
-        //     { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
-        //     { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
-        //     { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
-        // },
             case LLM_ARCH_GPT2:
                 {
                     // TODO: CPU-only for now
@@ -3570,11 +3557,11 @@ static struct ggml_cgraph * llm_build_gptj(
             offload_func_kq(tmpq);
             ggml_set_name(tmpq, "tmpq");
 
-            struct ggml_tensor * Kcur = ggml_rope_custom_inplace(ctx0, ggml_reshape_3d(ctx0, tmpk, n_embd_head, n_head_kv, N), n_past, n_embd_head, 0, 0, freq_base, freq_scale);
+            struct ggml_tensor * Kcur = ggml_rope_custom_inplace(ctx0, ggml_reshape_3d(ctx0, tmpk, n_embd_head, n_head_kv, N), n_past, hparams.n_rot, 0, 0, freq_base, freq_scale);
             offload_func_kq(Kcur);
             ggml_set_name(Kcur, "Kcur");
 
-            struct ggml_tensor * Qcur = ggml_rope_custom_inplace(ctx0, ggml_reshape_3d(ctx0, tmpq, n_embd_head, n_head, N),    n_past, n_embd_head, 0, 0, freq_base, freq_scale);
+            struct ggml_tensor * Qcur = ggml_rope_custom_inplace(ctx0, ggml_reshape_3d(ctx0, tmpq, n_embd_head, n_head_kv, N), n_past, hparams.n_rot, 0, 0, freq_base, freq_scale);
             offload_func_kq(Qcur);
             ggml_set_name(Qcur, "Qcur");
 
@@ -3741,7 +3728,7 @@ static struct ggml_cgraph * llm_build_gptj(
     ggml_free(ctx0);
 
     return gf;
-} // build_gptj
+} // llm_build_gptj
 
 static struct ggml_cgraph * llm_build_gpt2(
          llama_context & lctx,
