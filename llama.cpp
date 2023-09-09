@@ -2205,7 +2205,7 @@ static void llm_load_tensors(
                         model.output_norm   = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd},          backend_norm);
                         model.output_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT_NORM, "bias"),   {n_embd},          backend_norm);
                         model.output        = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, backend_output);
-                        model.output_b      = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT,      "bias"),   {n_vocab},         backend_output);
+                        model.output_b      = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT,      "bias"),   {n_vocab},         GGML_BACKEND_CPU);
 
                         if (backend_norm == GGML_BACKEND_GPU) {
                             vram_weights += ggml_nbytes(model.output_norm);
