@@ -387,8 +387,8 @@ bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt2bpe_voca
         if (keyidx != -1) { fprintf(stdout, "%s: model license        = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
         keyidx = gguf_find_key(ggufctx, "general.architecture");
         if (keyidx != -1) { fprintf(stdout, "%s: model architecture   = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
-        keyidx = gguf_find_key(ggufctx, "general.file_type");
-        if (keyidx != -1) { fprintf(stdout, "%s: model file type      = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
+        // keyidx = gguf_find_key(ggufctx, "general.file_type");
+        // if (keyidx != -1) { fprintf(stdout, "%s: model file type      = %s\n", __func__, gguf_get_val_u32(ggufctx, keyidx)); }
         keyidx = gguf_find_key(ggufctx, "gpt2.tensor_data_layout");
         if (keyidx != -1) { fprintf(stdout, "%s: model data layout    = %s\n", __func__, gguf_get_val_str(ggufctx, keyidx)); }
         keyidx = gguf_find_key(ggufctx, "general.source.hugginface.repository");
