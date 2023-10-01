@@ -85,6 +85,7 @@ class MODEL_ARCH(IntEnum):
     GPTNEOX       : int = auto()
     MPT           : int = auto()
     STARCODER     : int = auto()
+    PLAMO         : int = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -116,6 +117,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GPTNEOX:        "gptneox",
     MODEL_ARCH.MPT:            "mpt",
     MODEL_ARCH.STARCODER:      "starcoder",
+    MODEL_ARCH.PLAMO:          "plamo",
 }
 
 MODEL_TENSOR_NAMES: dict[MODEL_ARCH, dict[MODEL_TENSOR, str]] = {
@@ -209,7 +211,21 @@ MODEL_TENSOR_NAMES: dict[MODEL_ARCH, dict[MODEL_TENSOR, str]] = {
         MODEL_TENSOR.FFN_DOWN:      "blk.{bid}.ffn_down",
         MODEL_TENSOR.FFN_UP:        "blk.{bid}.ffn_up",
     },
-    # TODO
+    MODEL_ARCH.PLAMO: {
+        MODEL_TENSOR.TOKEN_EMBD:    "token_embd",
+        MODEL_TENSOR.OUTPUT_NORM:   "output_norm",
+        MODEL_TENSOR.OUTPUT:        "output",
+        MODEL_TENSOR.ROPE_FREQS:    "rope_freqs",
+        MODEL_TENSOR.ATTN_NORM:     "blk.{bid}.attn_norm",
+        MODEL_TENSOR.ATTN_Q:        "blk.{bid}.attn_q",
+        MODEL_TENSOR.ATTN_K:        "blk.{bid}.attn_k",
+        MODEL_TENSOR.ATTN_V:        "blk.{bid}.attn_v",
+        MODEL_TENSOR.ATTN_OUT:      "blk.{bid}.attn_output",
+        MODEL_TENSOR.ATTN_ROT_EMBD: "blk.{bid}.attn_rot_embd",
+        MODEL_TENSOR.FFN_GATE:      "blk.{bid}.ffn_gate",
+        MODEL_TENSOR.FFN_DOWN:      "blk.{bid}.ffn_down",
+        MODEL_TENSOR.FFN_UP:        "blk.{bid}.ffn_up",
+    },
 }
 
 # tensors that will not be serialized
@@ -232,7 +248,7 @@ class TensorNameMap:
             "gpt_neox.embed_in",           # gptneox
             "transformer.wte",             # gpt2 mpt gptj
             "transformer.word_embeddings", # falcon
-            "model.embed_tokens",          # llama-hf
+            "model.embed_tokens",          # llama-hf plamo
             "tok_embeddings",              # llama-pth
         ),
 
@@ -244,7 +260,7 @@ class TensorNameMap:
         # Output
         MODEL_TENSOR.OUTPUT: (
             "embed_out", # gptneox
-            "lm_head",   # gpt2 mpt falcon llama-hf baichuan gptj
+            "lm_head",   # gpt2 mpt falcon llama-hf baichuan gptj plamo
             "output",    # llama-pth
         ),
 
@@ -252,7 +268,7 @@ class TensorNameMap:
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm", # gptneox
             "transformer.ln_f",          # gpt2 falcon gptj
-            "model.norm",                # llama-hf baichuan
+            "model.norm",                # llama-hf baichuan plamo
             "norm",                      # llama-pth
         ),
 
@@ -271,6 +287,7 @@ class TensorNameMap:
             "transformer.h.{bid}.input_layernorm",   # falcon7b
             "transformer.h.{bid}.ln_mlp",            # falcon40b
             "model.layers.{bid}.input_layernorm",    # llama-hf
+            "model.layers.layers.{bid}.norm",        # plamo
             "layers.{bid}.attention_norm",           # llama-pth
         ),
 
@@ -291,6 +308,7 @@ class TensorNameMap:
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
             "model.layers.{bid}.self_attn.q_proj", # llama-hf
+            "model.layers.layers.{bid}.self_attn.q_proj", # plamo
             "layers.{bid}.attention.wq",           # llama-pth
             "transformer.h.{bid}.attn.q_proj",     # gptj
         ),
@@ -298,6 +316,7 @@ class TensorNameMap:
         # Attention key
         MODEL_TENSOR.ATTN_K: (
             "model.layers.{bid}.self_attn.k_proj", # llama-hf
+            "model.layers.layers.{bid}.self_attn.k_proj", # plamo
             "layers.{bid}.attention.wk",           # llama-pth
             "transformer.h.{bid}.attn.k_proj",     # gptj
         ),
@@ -305,6 +324,7 @@ class TensorNameMap:
         # Attention value
         MODEL_TENSOR.ATTN_V: (
             "model.layers.{bid}.self_attn.v_proj", # llama-hf
+            "model.layers.layers.{bid}.self_attn.v_proj", # plamo
             "layers.{bid}.attention.wv",           # llama-pth
             "transformer.h.{bid}.attn.v_proj",     # gptj
         ),
@@ -317,6 +337,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.out_proj",   # mpt
             "transformer.h.{bid}.self_attention.dense", # falcon
             "model.layers.{bid}.self_attn.o_proj",      # llama-hf
+            "model.layers.layers.{bid}.self_attn.o_proj", # plamo
             "layers.{bid}.attention.wo",                # llama-pth
         ),
 
@@ -341,6 +362,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.up_proj",    # mpt
             "transformer.h.{bid}.mlp.dense_h_to_4h",   # falcon
             "model.layers.{bid}.mlp.up_proj",          # llama-hf
+            "model.layers.layers.{bid}.mlp.up_proj",   # plamo
             "layers.{bid}.feed_forward.w3",            # llama-pth
             "transformer.h.{bid}.mlp.fc_in",           # gpt2
         ),
@@ -348,6 +370,7 @@ class TensorNameMap:
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
             "model.layers.{bid}.mlp.gate_proj", # llama-hf
+            "model.layers.layers.{bid}.mlp.gate_proj", # plamo
             "layers.{bid}.feed_forward.w1",     # llama-pth
         ),
 
@@ -358,6 +381,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.down_proj",  # mpt
             "transformer.h.{bid}.mlp.dense_4h_to_h",   # falcon
             "model.layers.{bid}.mlp.down_proj",        # llama-hf
+            "model.layers.layers.{bid}.mlp.down_proj", # plamo
             "layers.{bid}.feed_forward.w2",            # llama-pth
             "transformer.h.{bid}.mlp.fc_out",          # gpt2
         ),
