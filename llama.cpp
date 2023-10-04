@@ -5293,7 +5293,6 @@ static struct ggml_cgraph * llm_build_plamo(
     const bool do_rope_shift = ggml_allocr_is_measure(lctx.alloc) || kv_self.has_shift;
 
     //printf("n_kv = %d\n", n_kv);
-    printf("plamo\n");
 
     auto & buf_compute = lctx.buf_compute;
 
