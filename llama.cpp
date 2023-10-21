@@ -1141,7 +1141,6 @@ struct llama_layer {
     struct ggml_tensor * wk;
     struct ggml_tensor * wv;
     struct ggml_tensor * wo;
-    struct ggml_tensor * wo_b; // 
     struct ggml_tensor * wqkv;
 
     // attention bias
@@ -3056,7 +3055,7 @@ static void llm_load_tensors(
                         layer.wqkv        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa},backend_split);
                         layer.bqkv        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "bias",   i), {n_embd + 2*n_embd_gqa},        backend);
                         layer.wo          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd},               backend_split);
-                        layer.wo_b        = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd},                       backend);
+                        layer.bo          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd},                       backend);
                         layer.ffn_norm    = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd},                       backend);
                         layer.ffn_norm_b  = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "bias",   i), {n_embd},                       backend);
                         layer.w2          = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd},                 backend_split);
@@ -3068,7 +3067,7 @@ static void llm_load_tensors(
                             vram_weights +=
                                 ggml_nbytes(layer.attn_norm) + ggml_nbytes(layer.attn_norm_b) +
                                 ggml_nbytes(layer.wqkv)      + ggml_nbytes(layer.bqkv)        +
-                                ggml_nbytes(layer.wo)        + ggml_nbytes(layer.wo_b)        +
+                                ggml_nbytes(layer.wo)        + ggml_nbytes(layer.bo)        +
                                 ggml_nbytes(layer.ffn_norm)  + ggml_nbytes(layer.ffn_norm_b)  +
                                 ggml_nbytes(layer.w2)        + ggml_nbytes(layer.b2)          +
                                 ggml_nbytes(layer.w3)        + ggml_nbytes(layer.b3);
@@ -3205,7 +3204,7 @@ static void llm_load_tensors(
                         layer.wqkv          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "weight",   i), {n_embd, n_embd + 2*n_embd_gqa},backend_split);
                         layer.bqkv          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_QKV, "bias",     i), {n_embd + 2*n_embd_gqa},        backend);
                         layer.wo            = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "weight",   i), {n_embd, n_embd},               backend_split);
-                        layer.wo_b          = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias",     i), {n_embd},                       backend);
+                        layer.bo            = ml.create_tensor(ctx, tn(LLM_TENSOR_ATTN_OUT, "bias",     i), {n_embd},                       backend);
                         // layer.ffn_norm      = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd},                       backend);
                         // layer.ffn_norm_b    = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_NORM, "bias",   i), {n_embd},                       backend);
                         layer.w2            = ml.create_tensor(ctx, tn(LLM_TENSOR_FFN_DOWN, "weight",   i), {n_ff, n_embd},                 backend_split);
@@ -3218,7 +3217,7 @@ static void llm_load_tensors(
                                 ggml_nbytes(layer.attn_norm)   + ggml_nbytes(layer.attn_norm_b)   +
                                 ggml_nbytes(layer.attn_norm_2) + ggml_nbytes(layer.attn_norm_2_b) +
                                 ggml_nbytes(layer.wqkv)        + ggml_nbytes(layer.bqkv)          +
-                                ggml_nbytes(layer.wo)          + ggml_nbytes(layer.wo_b)          +
+                                ggml_nbytes(layer.wo)          + ggml_nbytes(layer.bo)          +
                                 ggml_nbytes(layer.w2)          + ggml_nbytes(layer.b2)            +
                                 ggml_nbytes(layer.w3)          + ggml_nbytes(layer.b3);
                         }
@@ -6348,7 +6347,7 @@ static struct ggml_cgraph * llm_build_gptneox(
             cur = ggml_mul_mat(ctx0, model.layers[il].wo, cur);
             offload_func(cur);
 
-            cur = ggml_add(ctx0, cur, model.layers[il].wo_b);
+            cur = ggml_add(ctx0, cur, model.layers[il].bo);
             offload_func(cur);
 
             ggml_set_name(cur, "result_wo");
@@ -6995,7 +6994,7 @@ static struct ggml_cgraph * llm_build_gpt2(
             cur = ggml_mul_mat(ctx0, model.layers[il].wo, cur);
             offload_func(cur);
 
-            cur = ggml_add(ctx0, cur, model.layers[il].wo_b);
+            cur = ggml_add(ctx0, cur, model.layers[il].bo);
             offload_func(cur);
 
             ggml_set_name(cur, "result_wo");
