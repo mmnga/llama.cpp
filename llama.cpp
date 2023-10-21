@@ -7612,8 +7612,10 @@ static int llama_decode_internal(
 
     ggml_allocr_alloc_graph(lctx.alloc, gf);
 
+    // gpt-j use output.bias. result_norm last index add 1.
+    int result_norm_last_index = model.arch == LLM_ARCH_GPTJ ? 3 : 2;
     struct ggml_tensor * res        = gf->nodes[gf->n_nodes - 1];
-    struct ggml_tensor * embeddings = gf->nodes[gf->n_nodes - 2];
+    struct ggml_tensor * embeddings = gf->nodes[gf->n_nodes - result_norm_last_index];
 
     GGML_ASSERT(strcmp(res->name,        "result_output") == 0);
     GGML_ASSERT(strcmp(embeddings->name, "result_norm")   == 0);
@@ -7665,14 +7667,6 @@ static int llama_decode_internal(
     if (ggml_cpu_has_cublas() && full_offload_supported && fully_offloaded) {
         n_threads = 1;
     }
-
-    // gpt-j use output.bias. result_norm last index add 1.
-    int result_norm_last_index = model.arch == LLM_ARCH_GPTJ ? 3 : 2;
-    struct ggml_tensor * res        = gf->nodes[gf->n_nodes - 1];
-    struct ggml_tensor * embeddings = gf->nodes[gf->n_nodes - result_norm_last_index];
- 
-    GGML_ASSERT(strcmp(res->name,        "result_output") == 0);
-    GGML_ASSERT(strcmp(embeddings->name, "result_norm")   == 0);
 
 #if GGML_USE_MPI
     const int64_t n_layer = hparams.n_layer;
