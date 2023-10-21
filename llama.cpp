@@ -387,7 +387,7 @@ static std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NAMES = 
         LLM_ARCH_GPT2,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
-            { LLM_TENSOR_POS_EMBD,        "pos_embd" },
+            { LLM_TENSOR_POS_EMBD,        "position_embd" },
             { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
             { LLM_TENSOR_OUTPUT,          "output" },
             { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
@@ -2223,35 +2223,33 @@ static void llm_load_vocab(
 
             // read bpe merges and populate bpe ranks
             const int merges_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str());
-            if (merges_keyidx == -1) {
-                throw std::runtime_error("cannot find tokenizer merges in model file\n");
-            }
+            if (merges_keyidx > -1) {
+                const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
 
-            const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
+                for (int i = 0; i < n_merges; i++) {
+                    const std::string word = gguf_get_arr_str(ctx, merges_keyidx, i);
+                    GGML_ASSERT(codepoints_from_utf8(word).size() > 0);
 
-            for (int i = 0; i < n_merges; i++) {
-                const std::string word = gguf_get_arr_str(ctx, merges_keyidx, i);
-                GGML_ASSERT(codepoints_from_utf8(word).size() > 0);
+                    std::string first;
+                    std::string second;
 
-                std::string first;
-                std::string second;
+                    const size_t pos = word.find(' ', 1);
 
-                const size_t pos = word.find(' ', 1);
+                    if (pos != std::string::npos) {
+                        first  = word.substr(0, pos);
+                        second = word.substr(pos + 1);
+                    }
 
-                if (pos != std::string::npos) {
-                    first  = word.substr(0, pos);
-                    second = word.substr(pos + 1);
+                    vocab.bpe_ranks.emplace(std::make_pair(first, second), i);
                 }
 
-                vocab.bpe_ranks.emplace(std::make_pair(first, second), i);
+                // default special tokens
+                vocab.special_bos_id = 11;
+                vocab.special_eos_id = 11;
+                vocab.special_unk_id = -1;
+                vocab.special_sep_id = -1;
+                vocab.special_pad_id = -1;
             }
-
-            // default special tokens
-            vocab.special_bos_id = 11;
-            vocab.special_eos_id = 11;
-            vocab.special_unk_id = -1;
-            vocab.special_sep_id = -1;
-            vocab.special_pad_id = -1;
         } else {
             LLAMA_LOG_WARN("%s: unknown tokenizer: '%s'", __func__, tokenizer_name.c_str());
             LLAMA_LOG_WARN("%s: using default tokenizer: 'llama'", __func__);
@@ -2266,6 +2264,7 @@ static void llm_load_vocab(
 
     for (uint32_t i = 0; i < n_vocab; i++) {
         std::string word = gguf_get_arr_str(ctx, token_idx, i);
+        // printf("%d token %s size %d\n",i, word.c_str(), codepoints_from_utf8(word).size());
         GGML_ASSERT(codepoints_from_utf8(word).size() > 0);
 
         vocab.token_to_id[word] = i;

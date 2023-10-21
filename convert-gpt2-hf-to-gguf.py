@@ -18,31 +18,6 @@ if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py' / 'gguf'))
 import gguf
 
-# ref: https://github.com/openai/gpt-2/blob/master/src/encoder.py
-
-
-def bytes_to_unicode():
-    """
-    Returns list of utf-8 byte and a corresponding list of unicode strings.
-    The reversible bpe codes work on unicode strings.
-    This means you need a large # of unicode characters in your vocab if you want to avoid UNKs.
-    When you're at something like a 10B token dataset you end up needing around 5K for decent coverage.
-    This is a significant percentage of your normal, say, 32K bpe vocab.
-    To avoid that, we want lookup tables between utf-8 bytes and unicode strings.
-    And avoids mapping to whitespace/control characters the bpe code barfs on.
-    """
-    bs = list(range(ord("!"), ord("~")+1))+list(range(ord("¡"), ord("¬")+1))+list(range(ord("®"), ord("ÿ")+1))
-    cs = bs[:]
-    n = 0
-    for b in range(2**8):
-        if b not in bs:
-            bs.append(b)
-            cs.append(2**8+n)
-            n += 1
-    cs = [chr(n) for n in cs]
-    return dict(zip(bs, cs))
-
-
 def count_model_parts(dir_model: str) -> int:
     num_parts = 0
     for filename in os.listdir(dir_model):
@@ -132,56 +107,28 @@ toktypes: list[int] = []
 scores: list[float] = []
 
 tokenizer_json_file = dir_model / 'tokenizer.json'
+vocab_json_file = dir_model / 'vocab.json'
+vocab_txt_file = dir_model / 'vocab.txt'
+
 # 
 # bpe tokenizer
 # 
-if tokenizer_json_file.is_file():
+if tokenizer_json_file.is_file() or vocab_json_file.is_file() or vocab_txt_file.is_file():
 
     # gpt2 tokenizer
     gguf_writer.add_tokenizer_model("gpt2")
 
-    with open(tokenizer_json_file, "r", encoding="utf-8") as f:
-        tokenizer_json = json.load(f)
-
     print("gguf: get gpt2 tokenizer vocab")
 
-    vocab_size = len(tokenizer_json["model"]["vocab"])
-
-    # ref: https://github.com/cmp-nct/ggllm.cpp/blob/master/falcon_convert.py
     tokenizer = AutoTokenizer.from_pretrained(dir_model, use_fast=True)
+    vocab_size = hparams.get("vocab_size", len(tokenizer.vocab))
+    assert max(tokenizer.vocab.values()) < vocab_size
 
     reverse_vocab = {id: encoded_tok for encoded_tok, id in tokenizer.vocab.items()}
-    byte_encoder = bytes_to_unicode()
-    byte_decoder = {v: k for k, v in byte_encoder.items()}
-
     for i in range(vocab_size):
-        if i in reverse_vocab:
-            try:
-                text = bytearray([byte_decoder[c] for c in reverse_vocab[i]])
-            except KeyError:
-                text = bytearray()
-                for c in reverse_vocab[i]:
-                    if ord(c) < 256:  # single byte character
-                        text.append(byte_decoder[ord(c)])
-                    else:  # multibyte special token character
-                        text.extend(c.encode('utf-8'))
-        else:
-            print(f"Key {i} not in tokenizer vocabulary. Padding with an arbitrary token.")
-            pad_token = f"[PAD{i}]".encode("utf8")
-            text = bytearray(pad_token)
-
-        tokens.append(text)
-        scores.append(0.0) #dummy
-        toktypes.append(gguf.TokenType.NORMAL)  # dummy
-
-    # If you do not match the vocab_size in config.json, it will not match the shape of tensor.
-    # create_tensor: tensor 'token_embd.weight' has wrong shape
-    if hparams["vocab_size"] > len(tokens):
-        remaining = hparams["vocab_size"] - len(tokens)
-        for i in range(remaining):
-            tokens.append(bytearray([])) # dummy
-            scores.append(0.0) # dummy
-            toktypes.append(gguf.TokenType.NORMAL)  # dummy
+        tokens.append(reverse_vocab[i] if i in reverse_vocab else f"[PAD{i}]")
+        scores.append(0.0) # dummy
+        toktypes.append(gguf.TokenType.NORMAL)
 
     gguf_writer.add_token_list(tokens)
     gguf_writer.add_token_scores(scores)
