@@ -7232,7 +7232,7 @@ static struct ggml_cgraph * llm_build_plamo(
                             ggml_element_size(kv_self.k)*n_embd_head,
                             ggml_element_size(kv_self.k)*n_embd_gqa,
                             ggml_element_size(kv_self.k)*n_embd_gqa*n_ctx*il),
-                        K_shift, n_embd_head, 0, 0, freq_base, freq_scale);
+                        K_shift, n_embd_head, 2, 0, freq_base, freq_scale);
             offload_func_kq(tmp);
             ggml_build_forward_expand(gf, tmp);
         }
@@ -7274,11 +7274,11 @@ static struct ggml_cgraph * llm_build_plamo(
             offload_func_kq(tmpq);
             ggml_set_name(tmpq, "tmpq");
 
-            struct ggml_tensor * Kcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpk, n_embd_head, n_head_kv, n_tokens), KQ_pos, n_embd_head, 0, 0, freq_base, freq_scale);
+            struct ggml_tensor * Kcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpk, n_embd_head, n_head_kv, n_tokens), KQ_pos, n_embd_head, 2, 0, freq_base, freq_scale);
             offload_func_kq(Kcur);
             ggml_set_name(Kcur, "Kcur");
 
-            struct ggml_tensor * Qcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpq, n_embd_head, n_head,    n_tokens), KQ_pos, n_embd_head, 0, 0, freq_base, freq_scale);
+            struct ggml_tensor * Qcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpq, n_embd_head, n_head,    n_tokens), KQ_pos, n_embd_head, 2, 0, freq_base, freq_scale);
             offload_func_kq(Qcur);
             ggml_set_name(Qcur, "Qcur");
 
@@ -7322,8 +7322,17 @@ static struct ggml_cgraph * llm_build_plamo(
             offload_func_kq(K);
             ggml_set_name(K, "K");
 
+            // from this PR
+            // https://github.com/ggerganov/llama.cpp/pull/3557
+
             // K * Q
-            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
+            //struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
+            // we should avoid to repeat K but current ggml_mul_mat generates wrong values for grouped query att 
+            struct ggml_tensor * K_repeated = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, K->ne[0], K->ne[1], Q->ne[2]);
+            offload_func_kq(K_repeated);
+            ggml_set_name(K_repeated, "K_repeated");
+            
+            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, ggml_repeat(ctx0, K, K_repeated), Q);
             offload_func_kq(KQ);
             ggml_set_name(KQ, "KQ");
 
@@ -7353,17 +7362,15 @@ static struct ggml_cgraph * llm_build_plamo(
             offload_func_v(V);
             ggml_set_name(V, "V");
 
-#if 1
-            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ_soft_max);
+            //struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ_soft_max);
+            // we should avoid to repeat V but current ggml_mul_mat generates wrong values for grouped query att 
+            struct ggml_tensor * V_repeated = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, V->ne[0], V->ne[1], Q->ne[2]);
+            offload_func_v(V_repeated);
+            ggml_set_name(V_repeated, "V_repeated");
+            
+            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, ggml_repeat(ctx0, V, V_repeated), KQ_soft_max);
             offload_func_v(KQV);
             ggml_set_name(KQV, "KQV");
-#else
-            // make V contiguous in memory to speed up the matmul, however we waste time on the copy
-            // on M1 this is faster for the perplexity computation, but ~5% slower for the single-token generation
-            // is there a better way?
-            struct ggml_tensor * V_cont = ggml_cpy(ctx0, V, ggml_new_tensor_3d(ctx0, kv_self.v->type, n_ctx, n_embd_head, n_head));
-            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V_cont, KQ_soft_max);
-#endif
 
             // KQV_merged = KQV.permute(0, 2, 1, 3)
             struct ggml_tensor * KQV_merged = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
