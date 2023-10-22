@@ -193,77 +193,42 @@ if Path(dir_model + "/tokenizer.model").is_file():
     if Path(dir_model + "/tokenizer.json").is_file() and sp_vocab_size < config_vocab_size:
         print("gguf: Merge the expanded vocab.")
 
-        # ref: https://github.com/openai/gpt-2/blob/master/src/encoder.py
-        def bytes_to_unicode():
-            """
-            Returns list of utf-8 byte and a corresponding list of unicode strings.
-            The reversible bpe codes work on unicode strings.
-            This means you need a large # of unicode characters in your vocab if you want to avoid UNKs.
-            When you're at something like a 10B token dataset you end up needing around 5K for decent coverage.
-            This is a significant percentage of your normal, say, 32K bpe vocab.
-            To avoid that, we want lookup tables between utf-8 bytes and unicode strings.
-            And avoids mapping to whitespace/control characters the bpe code barfs on.
-            """
-            bs = list(range(ord("!"), ord("~")+1))+list(range(ord("¡"), ord("¬")+1))+list(range(ord("®"), ord("ÿ")+1))
-            cs = bs[:]
-            n = 0
-            for b in range(2**8):
-                if b not in bs:
-                    bs.append(b)
-                    cs.append(2**8+n)
-                    n += 1
-            cs = [chr(n) for n in cs]
-            return dict(zip(bs, cs))
-
         tf_tokenizer = AutoTokenizer.from_pretrained(dir_model, use_fast=True) # load tokenizer.json
         tf_vocab = tf_tokenizer.get_vocab()
         reverse_vocab = {tf_vocab[key]: key for key in tf_vocab.keys()}
 
-        byte_encoder = bytes_to_unicode()
-        byte_decoder = {v: k for k, v in byte_encoder.items()}
-
         for i in range(config_vocab_size - sp_vocab_size):
             token_id = sp_vocab_size + i
-            if token_id in reverse_vocab:
-                vocab_text = tf_tokenizer.decode([token_id])
-                try:
-                    text = bytearray([byte_decoder[c] for c in vocab_text])
-                except KeyError:
-                    text = bytearray()
-                    for c in vocab_text:
-                        if ord(c) < 256:  # single byte character
-                            try:
-                                bd = byte_decoder[ord(c)]
-                            except:
-                                text.extend(c.encode('utf-8'))
-                                continue
-
-                            text.append(bd)
-                        else:  # multibyte special token character
-                            text.extend(c.encode('utf-8'))
-            else:
-                print(f"Key {token_id} not in tokenizer vocabulary. Padding with an arbitrary token.")
-                pad_token = f"[PAD{token_id}]".encode("utf8")
-                text = bytearray(pad_token)
-
+            text = tf_tokenizer.decode([token_id]) if token_id in reverse_vocab else f"[PAD{token_id}]"
             score = 0.0 # dummy
             toktype = gguf.TokenType.NORMAL
 
-            # custom token type
-            # if (idx) in [32000,32001,32002,32003,32004]:
+            # # custom token type
+            # if (token_id) in [32000,32001,32002,32003,32004]:
             #   toktype = gguf.TokenType.USER_DEFINED
-            # if (idx) in [43795,45020,44311,44366,44717,44791,44976 ]:
+            # if (token_id) in [43795,45020,44311,44366,44717,44791,44976 ]:
             #   toktype = gguf.TokenType.NORMAL
-            # if (idx) >= 32005 and (idx) <= 32031:
+            # if (token_id) >= 32005 and (token_id) <= 32031:
             #     toktype = gguf.TokenType.CONTROL
-            # if (idx) >= 32033 and (idx) <= 32044:
+            # if (token_id) >= 32033 and (token_id) <= 32044:
             #     toktype = gguf.TokenType.BYTE
 
-            tokens.append(text)
+            # custom token type
+            if (token_id) in [32000,32001,32002,32003,32004]:
+                toktype = gguf.TokenType.CONTROL
+            if (token_id) >= 32005 and (token_id) <= 32044:
+                toktype = gguf.TokenType.NORMAL
+                text = f"[PAD{token_id}]"
+            if (token_id) == 32003:
+                text = f"[PAD]"
+            # if (token_id) >= 32033 and (token_id) <= 32044:
+            #     toktype = gguf.TokenType.BYTE
+
+            tokens.append(text.encode("utf-8"))
             scores.append(score)
             toktypes.append(toktype) 
 
-        print(f"gguf: Merged {config_vocab_size - sp_vocab_size} tokens.")
+        print(f"gguf: Ex Merged {config_vocab_size - sp_vocab_size} tokens.")
 
     gguf_writer.add_tokenizer_model("llama")
     gguf_writer.add_token_list(tokens)
