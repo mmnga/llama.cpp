@@ -14,11 +14,7 @@ from typing import Any
 import numpy as np
 import torch
 from transformers import AutoTokenizer  # type: ignore[import]
-try:
-    from safetensors import safe_open
-except ImportError:
-    print("Please install `safetensors` python package")
-    sys.exit(1)
+from safetensors import safe_open
 
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py' / 'gguf'))
@@ -116,15 +112,27 @@ vocab_size = hparams.get("vocab_size", len(tokenizer.vocab))
 assert max(tokenizer.vocab.values()) < vocab_size
 
 reverse_vocab = {id: encoded_tok for encoded_tok, id in tokenizer.vocab.items()}
+added_vocab = tokenizer.get_added_vocab()
 
 for i in range(vocab_size):
-    tokens.append(reverse_vocab[i] if i in reverse_vocab else f"[PAD{i}]")
+    if i not in reverse_vocab:
+        tokens.append(f"[PAD{i}]")
+        toktypes.append(gguf.TokenType.USER_DEFINED)
+    elif reverse_vocab[i] in added_vocab:
+        tokens.append(reverse_vocab[i])
+        if tokenizer.added_tokens_decoder[i].special:
+            toktypes.append(gguf.TokenType.CONTROL)
+        else:
+            toktypes.append(gguf.TokenType.USER_DEFINED)
+    else:
+        tokens.append(reverse_vocab[i])
+        toktypes.append(gguf.TokenType.NORMAL)
+
     scores.append(0.0) # dummy
-    toktypes.append(gguf.TokenType.NORMAL)
 
 gguf_writer.add_token_list(tokens)
-gguf_writer.add_token_scores(scores)
 gguf_writer.add_token_types(toktypes)
+gguf_writer.add_token_scores(scores)
 
 special_vocab = gguf.SpecialVocab(dir_model, load_merges = True)
 special_vocab.add_to_gguf(gguf_writer)

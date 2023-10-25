@@ -3328,6 +3328,14 @@ static void llm_load_tensors(
                         ggml_backend_type backend_norm;
                         ggml_backend_type backend_output;
 
+                        // Don't allow for offloading of more than 33 layers.
+                        // Offloading 34 layers causes model to respond with letter 'E'
+                        // Offloading 35 layers doesn't work because of missing cuda implementation for rope:
+                        // GGML_ASSERT: ggml-cuda.cu:6402: ne00 == n_dims && "ne00 != n_dims is not implemented for CUDA yet"
+                        if (n_gpu_layers > 33) {
+                            n_gpu_layers = 33;
+                        }
+
                         if (n_gpu_layers > int(n_layer)) {
                             // norm is not performance relevant on its own but keeping it in VRAM reduces data copying
                             // on Windows however this is detrimental unless everything is on the GPU
@@ -3343,7 +3351,7 @@ static void llm_load_tensors(
                             backend_output = GGML_BACKEND_CPU;
                         }
 
-                        model.output_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT_NORM, "bias"), {n_embd}, backend_norm);
+                        model.output_norm_b = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT_NORM, "bias"), {n_embd},          backend_norm);
                         model.output_norm = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd},          backend_norm);
                         model.output      = ml.create_tensor(ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, backend_output);
 
@@ -7574,6 +7582,7 @@ static struct ggml_cgraph * llm_build_stablelm(
     const int64_t n_embd      = hparams.n_embd;
     const int64_t n_layer     = hparams.n_layer;
     const int64_t n_ctx       = cparams.n_ctx;
+    const int64_t n_rot       = hparams.n_rot;
     const int64_t n_head      = hparams.n_head;
     const int64_t n_head_kv   = hparams.n_head_kv;
     const int64_t n_embd_head = hparams.n_embd_head();
@@ -7581,7 +7590,7 @@ static struct ggml_cgraph * llm_build_stablelm(
 
     const float freq_base    = cparams.rope_freq_base;
     const float freq_scale   = cparams.rope_freq_scale;
-    const float norm_rms_eps = hparams.f_norm_rms_eps;
+    const float norm_eps     = hparams.f_norm_eps;
 
     const int n_gpu_layers = model.n_gpu_layers;
 
@@ -7716,7 +7725,7 @@ static struct ggml_cgraph * llm_build_stablelm(
                             ggml_element_size(kv_self.k)*n_embd_head,
                             ggml_element_size(kv_self.k)*n_embd_gqa,
                             ggml_element_size(kv_self.k)*n_embd_gqa*n_ctx*il),
-                        K_shift, n_embd_head, 2, 0, freq_base, freq_scale);
+                        K_shift, n_rot, 2, 0, freq_base, freq_scale);
             offload_func_kq(tmp);
             ggml_build_forward_expand(gf, tmp);
         }
@@ -7737,9 +7746,9 @@ static struct ggml_cgraph * llm_build_stablelm(
 
         // norm
         {
-            cur = ggml_rms_norm(ctx0, inpL, norm_rms_eps);
+            cur = ggml_norm(ctx0, inpL, norm_eps);
             offload_func(cur);
-            ggml_set_name(cur, "rms_norm_0");
+            ggml_set_name(cur, "norm_0");
 
             // cur = cur*attn_norm(broadcasted)
             cur = ggml_mul(ctx0, cur, model.layers[il].attn_norm);
@@ -7763,11 +7772,11 @@ static struct ggml_cgraph * llm_build_stablelm(
             offload_func_kq(tmpq);
             ggml_set_name(tmpq, "tmpq");
 
-            struct ggml_tensor * Kcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpk, n_embd_head, n_head_kv, n_tokens), KQ_pos, n_embd_head, 2, 0, freq_base, freq_scale);
+            struct ggml_tensor * Kcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpk, n_embd_head, n_head_kv, n_tokens), KQ_pos, n_rot, 2, 0, freq_base, freq_scale);
             offload_func_kq(Kcur);
             ggml_set_name(Kcur, "Kcur");
 
-            struct ggml_tensor * Qcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpq, n_embd_head, n_head,    n_tokens), KQ_pos, n_embd_head, 2, 0, freq_base, freq_scale);
+            struct ggml_tensor * Qcur = ggml_rope_custom(ctx0, ggml_reshape_3d(ctx0, tmpq, n_embd_head, n_head,    n_tokens), KQ_pos, n_rot, 2, 0, freq_base, freq_scale);
             offload_func_kq(Qcur);
             ggml_set_name(Qcur, "Qcur");
 
@@ -7880,9 +7889,9 @@ static struct ggml_cgraph * llm_build_stablelm(
         {
             // norm
             {
-                cur = ggml_rms_norm(ctx0, inpFF, norm_rms_eps);
+                cur = ggml_norm(ctx0, inpFF, norm_eps);
                 offload_func(cur);
-                ggml_set_name(cur, "rms_norm_1");
+                ggml_set_name(cur, "norm_1");
 
                 // cur = cur*ffn_norm(broadcasted)
                 cur = ggml_mul(ctx0, cur, model.layers[il].ffn_norm);
@@ -7936,14 +7945,19 @@ static struct ggml_cgraph * llm_build_stablelm(
 
     // norm
     {
-        cur = ggml_rms_norm(ctx0, cur, norm_rms_eps);
+        cur = ggml_norm(ctx0, cur, norm_eps);
         offload_func_nr(cur);
-        ggml_set_name(cur, "rms_norm_2");
+        ggml_set_name(cur, "norm_2");
 
         // cur = cur*norm(broadcasted)
         cur = ggml_mul(ctx0, cur, model.output_norm);
         // offload_func_nr(cur); // TODO CPU + GPU mirrored backend
+        // ggml_set_name(cur, "result_norm");
+
+        cur = ggml_add(ctx0, cur, model.output_norm_b);
+        offload_func_nr(cur);
         ggml_set_name(cur, "result_norm");
+
     }
 
     // lm_head
